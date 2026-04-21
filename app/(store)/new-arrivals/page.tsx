@@ -1,5 +1,17 @@
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { Sparkles } from 'lucide-react'
+
+export const metadata: Metadata = {
+  title: 'الجديد',
+  description: 'أحدث وصولات MELY•IMA من العباءات النسائية العصرية — تشكيلات جديدة بجودة مضمونة. توصيل لجميع ولايات الجزائر.',
+  alternates: { canonical: 'https://melyima.com/new-arrivals' },
+  openGraph: {
+    title: 'الجديد | MELY•IMA',
+    description: 'أحدث تشكيلات العباءات النسائية العصرية من MELY•IMA في الجزائر.',
+    url: 'https://melyima.com/new-arrivals',
+  },
+}
 import ProductCard from '@/components/store/ProductCard'
 import type { Product } from '@/lib/types'
 

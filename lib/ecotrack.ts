@@ -1,0 +1,190 @@
+export const WILAYA_CODES: Record<string, number> = {
+  'Adrar': 1, 'Chlef': 2, 'Laghouat': 3, 'Oum El Bouaghi': 4,
+  'Batna': 5, 'Bejaia': 6, 'Biskra': 7, 'Béchar': 8,
+  'Blida': 9, 'Bouira': 10, 'Tamanrasset': 11, 'Tébessa': 12,
+  'Tlemcen': 13, 'Tiaret': 14, 'Tizi Ouzou': 15, 'Alger': 16,
+  'Djelfa': 17, 'Jijel': 18, 'Sétif': 19, 'Saïda': 20,
+  'Skikda': 21, 'Sidi Bel Abbès': 22, 'Annaba': 23, 'Guelma': 24,
+  'Constantine': 25, 'Médéa': 26, 'Mostaganem': 27, "M'Sila": 28,
+  'Mascara': 29, 'Ouargla': 30, 'Oran': 31, 'El Bayadh': 32,
+  'Illizi': 33, 'Bordj Bou Arreridj': 34, 'Boumerdès': 35,
+  'El Tarf': 36, 'Tindouf': 37, 'Tissemsilt': 38, 'El Oued': 39,
+  'Khenchela': 40, 'Souk Ahras': 41, 'Tipaza': 42, 'Mila': 43,
+  'Ain Defla': 44, 'Naâma': 45, 'Ain Temouchent': 46,
+  'Ghardaia': 47, 'Relizane': 48, 'Timimoun': 49,
+  'Bordj Badji Mokhtar': 50, 'Ouled Djellal': 51,
+  'Beni Abbes': 52, 'In Salah': 53, 'In Guezzam': 54,
+  'Touggourt': 55, 'Djanet': 56, "El M'Ghair": 57, 'El Meniaa': 58,
+}
+
+export const WILAYA_CODE_BY_NUMBER: Record<string, number> = {
+  '01': 1, '1': 1,
+  '02': 2, '2': 2,
+  '03': 3, '3': 3,
+  '04': 4, '4': 4,
+  '05': 5, '5': 5,
+  '06': 6, '6': 6,
+  '07': 7, '7': 7,
+  '08': 8, '8': 8,
+  '09': 9, '9': 9,
+  '10': 10,
+  '11': 11,
+  '12': 12,
+  '13': 13,
+  '14': 14,
+  '15': 15,
+  '16': 16,
+  '17': 17,
+  '18': 18,
+  '19': 19,
+  '20': 20,
+  '21': 21,
+  '22': 22,
+  '23': 23,
+  '24': 24,
+  '25': 25,
+  '26': 26,
+  '27': 27,
+  '28': 28,
+  '29': 29,
+  '30': 30,
+  '31': 31,
+  '32': 32,
+  '33': 33,
+  '34': 34,
+  '35': 35,
+  '36': 36,
+  '37': 37,
+  '38': 38,
+  '39': 39,
+  '40': 40,
+  '41': 41,
+  '42': 42,
+  '43': 43,
+  '44': 44,
+  '45': 45,
+  '46': 46,
+  '47': 47,
+  '48': 48,
+  '49': 49,
+  '50': 50,
+  '51': 51,
+  '52': 52,
+  '53': 53,
+  '54': 54,
+  '55': 55,
+  '56': 56,
+  '57': 57,
+  '58': 58,
+}
+
+const BASE_URL = process.env.ECOTRACK_API_URL
+const TOKEN = process.env.ECOTRACK_API_TOKEN
+
+// CREATE order (draft)
+export async function ecotrackCreateOrder(params: {
+  nom_client: string
+  telephone: string
+  telephone_2?: string
+  adresse: string
+  commune: string
+  code_wilaya: number
+  montant: number
+  stop_desk: number
+  produit?: string
+  remarque?: string
+  reference?: string
+}): Promise<{ success: boolean; tracking?: string; message?: string }> {
+  try {
+    const query = new URLSearchParams({
+      api_token: TOKEN!,
+      nom_client: params.nom_client,
+      telephone: params.telephone,
+      adresse: params.adresse,
+      commune: params.commune,
+      code_wilaya: String(params.code_wilaya),
+      montant: String(params.montant),
+      type: '1',
+      stop_desk: String(params.stop_desk),
+      stock: '0',
+      ...(params.telephone_2 && { telephone_2: params.telephone_2 }),
+      ...(params.produit && { produit: params.produit }),
+      ...(params.remarque && { remarque: params.remarque }),
+      ...(params.reference && { reference: params.reference }),
+    })
+
+    const res = await fetch(`${BASE_URL}/api/v1/create/order?${query}`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+    })
+
+    const data = await res.json()
+    if (data.tracking) return { success: true, tracking: data.tracking }
+    return { success: false, message: data.message ?? JSON.stringify(data.errors) }
+  } catch {
+    return { success: false, message: 'Network error' }
+  }
+}
+
+// SHIP order (validate)
+export async function ecotrackShipOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
+  try {
+    const res = await fetch(
+      `${BASE_URL}/api/v1/valid/order?api_token=${TOKEN}&tracking=${tracking}&ask_collection=0`,
+      { method: 'POST', headers: { 'Accept': 'application/json' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    return { success: res.ok, message: data.message }
+  } catch {
+    return { success: false, message: 'Network error' }
+  }
+}
+
+// UPDATE order
+export async function ecotrackUpdateOrder(tracking: string, params: {
+  client?: string
+  adresse?: string
+  commune?: string
+  wilaya?: number
+  montant?: number
+  tel?: string
+  tel2?: string
+  remarque?: string
+}): Promise<{ success: boolean; message?: string }> {
+  try {
+    const query = new URLSearchParams({ api_token: TOKEN!, tracking, type: '1' })
+    if (params.client) query.set('client', params.client)
+    if (params.adresse) query.set('adresse', params.adresse)
+    if (params.commune) query.set('commune', params.commune)
+    if (params.wilaya) query.set('wilaya', String(params.wilaya))
+    if (params.montant) query.set('montant', String(params.montant))
+    if (params.tel) query.set('tel', params.tel)
+    if (params.tel2) query.set('tel2', params.tel2)
+    if (params.remarque) query.set('remarque', params.remarque)
+
+    console.log('Update request params:', query.toString())
+    const res = await fetch(`${BASE_URL}/api/v1/update/order?${query}`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    console.log('Update response status:', res.status, 'body:', data)
+    return { success: res.ok, message: data.message }
+  } catch {
+    return { success: false, message: 'Network error' }
+  }
+}
+
+// DELETE order
+export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
+  try {
+    const res = await fetch(
+      `${BASE_URL}/api/v1/delete/order?api_token=${TOKEN}&tracking=${tracking}`,
+      { method: 'DELETE', headers: { 'Accept': 'application/json' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    return { success: res.ok, message: data.message }
+  } catch {
+    return { success: false, message: 'Network error' }
+  }
+}

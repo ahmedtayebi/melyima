@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
-import { Search, ChevronDown, ChevronUp } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, X, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
@@ -34,6 +34,28 @@ export default function OrdersClient({ initialOrders }: Props) {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [editForm, setEditForm] = useState({
+    adresse: '', commune: '', tel: '', tel2: '', remarque: '',
+  })
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const showToast = (message: string, type: 'success' | 'error') => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  useEffect(() => {
+    if (!confirmDialog) return
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmDialog(null) }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [confirmDialog])
 
   // ── Stats ─────────────────────────────────────────────────
   const stats = useMemo(() => ({
@@ -63,6 +85,119 @@ export default function OrdersClient({ initialOrders }: Props) {
   const handleFilter = (f: FilterType) => { setFilter(f); setPage(1) }
   const handleSearch = (v: string) => { setSearch(v); setPage(1) }
 
+  // ── Ecotrack helpers ──────────────────────────────────────
+  const setLoading = (id: string, action: string, val: boolean) =>
+    setEcotrackLoading(prev => ({ ...prev, [`${id}-${action}`]: val }))
+
+  const createDraft = async (orderId: string) => {
+    setLoading(orderId, 'create', true)
+    try {
+      const res = await fetch('/api/ecotrack/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: orderId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setOrders(prev => prev.map(o =>
+          o.id === orderId
+            ? { ...o, ecotrack_tracking: data.tracking, ecotrack_status: 'draft' as const }
+            : o
+        ))
+      } else {
+        showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
+      }
+    } finally {
+      setLoading(orderId, 'create', false)
+    }
+  }
+
+  const shipOrder = (orderId: string, tracking: string) => {
+    setConfirmDialog({
+      message: 'هل أنت متأكد؟ لا يمكن التراجع بعد الإرسال للشحن.',
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setLoading(orderId, 'ship', true)
+        try {
+          const res = await fetch('/api/ecotrack/ship', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_id: orderId, tracking }),
+          })
+          const data = await res.json()
+          if (data.success || data.success === undefined) {
+            setOrders(prev => prev.map(o =>
+              o.id === orderId ? { ...o, ecotrack_status: 'shipped' as const } : o
+            ))
+          } else {
+            showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
+          }
+        } finally {
+          setLoading(orderId, 'ship', false)
+        }
+      },
+    })
+  }
+
+  const deleteFromEcotrack = (orderId: string, tracking: string) => {
+    setConfirmDialog({
+      message: 'حذف البوليصة من Ecotrack؟',
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setLoading(orderId, 'delete', true)
+        try {
+          const res = await fetch('/api/ecotrack/delete', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_id: orderId, tracking }),
+          })
+          const data = await res.json()
+          if (data.success || data.success === undefined) {
+            setOrders(prev => prev.map(o =>
+              o.id === orderId
+                ? { ...o, ecotrack_tracking: null, ecotrack_status: 'none' as const }
+                : o
+            ))
+          } else {
+            showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
+          }
+        } finally {
+          setLoading(orderId, 'delete', false)
+        }
+      },
+    })
+  }
+
+  const updateEcotrackOrder = async () => {
+    if (!editingOrder?.ecotrack_tracking) return
+    setLoading(editingOrder.id, 'update', true)
+    try {
+      const res = await fetch('/api/ecotrack/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tracking: editingOrder.ecotrack_tracking,
+          order_id: editingOrder.id,
+          adresse: editForm.adresse || undefined,
+          commune: editForm.commune || undefined,
+          montant: editingOrder.total_price,
+          tel: editForm.tel || undefined,
+          tel2: editForm.tel2 || undefined,
+          remarque: editForm.remarque || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (data.success || data.success === undefined) {
+        setEditingOrder(null)
+        showToast('تم التعديل بنجاح ✓', 'success')
+      } else {
+        showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
+      }
+    } finally {
+      setLoading(editingOrder.id, 'update', false)
+    }
+  }
+
   // ── Status update ─────────────────────────────────────────
   const updateStatus = async (orderId: string, status: OrderStatus) => {
     const supabase = createClient()
@@ -72,6 +207,11 @@ export default function OrdersClient({ initialOrders }: Props) {
       .eq('id', orderId)
     if (!error) {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o))
+      // Auto-create Ecotrack draft when confirmed
+      const order = orders.find(o => o.id === orderId)
+      if (status === 'confirmed' && !order?.ecotrack_tracking) {
+        await createDraft(orderId)
+      }
     }
   }
 
@@ -79,6 +219,108 @@ export default function OrdersClient({ initialOrders }: Props) {
     const dt = new Date(d)
     return `${dt.getDate()}/${dt.getMonth() + 1}/${dt.getFullYear()}`
   }
+
+  // ── Ecotrack section (shared between desktop + mobile) ────
+  const renderEcotrackSection = (order: Order) => (
+    <div className="mt-3 pt-3 border-t border-border">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Truck size={14} className="text-muted" />
+          <span className="text-xs font-heading font-bold text-brand">Ecotrack</span>
+          {order.ecotrack_status === 'draft' && (
+            <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">
+              مسودة
+            </span>
+          )}
+          {order.ecotrack_status === 'shipped' && (
+            <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold">
+              تم الإرسال
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* No tracking yet — show create button */}
+          {!order.ecotrack_tracking && order.status === 'confirmed' && (
+            <button
+              onClick={() => createDraft(order.id)}
+              disabled={ecotrackLoading[`${order.id}-create`]}
+              className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg"
+              style={{ backgroundColor: '#1a1a1a' }}
+            >
+              {ecotrackLoading[`${order.id}-create`]
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Truck size={12} />}
+              إنشاء بوليصة
+            </button>
+          )}
+
+          {/* Draft — show tracking + ship + delete + edit */}
+          {order.ecotrack_tracking && order.ecotrack_status === 'draft' && (
+            <>
+              <span className="text-xs font-body text-muted" dir="ltr">
+                {order.ecotrack_tracking}
+              </span>
+              <button
+                onClick={() => shipOrder(order.id, order.ecotrack_tracking!)}
+                disabled={ecotrackLoading[`${order.id}-ship`]}
+                className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg"
+                style={{ backgroundColor: '#8B1A2E' }}
+              >
+                {ecotrackLoading[`${order.id}-ship`]
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <Send size={12} />}
+                إرسال للشحن
+              </button>
+              <button
+                onClick={() => deleteFromEcotrack(order.id, order.ecotrack_tracking!)}
+                disabled={ecotrackLoading[`${order.id}-delete`]}
+                className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200"
+              >
+                {ecotrackLoading[`${order.id}-delete`]
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <Trash2 size={12} />}
+                حذف
+              </button>
+              <button
+                onClick={() => {
+                  setEditingOrder(order)
+                  setEditForm({
+                    adresse: order.address ?? '',
+                    commune: order.commune ?? '',
+                    tel: order.phone ?? '',
+                    tel2: order.phone2 ?? '',
+                    remarque: order.notes ?? '',
+                  })
+                }}
+                className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border"
+              >
+                <Pencil size={12} />
+                تعديل
+              </button>
+            </>
+          )}
+
+          {/* Shipped — show tracking + link */}
+          {order.ecotrack_tracking && order.ecotrack_status === 'shipped' && (
+            <>
+              <span className="text-xs font-body text-brand font-bold" dir="ltr">
+                {order.ecotrack_tracking}
+              </span>
+              <a
+                href={`https://www.ecotrack.dz/tracking/${order.ecotrack_tracking}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-accent hover:underline"
+              >
+                تتبع <ExternalLink size={10} />
+              </a>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -295,6 +537,8 @@ export default function OrdersClient({ initialOrders }: Props) {
                             </span>
                           </div>
                         </div>
+                        {/* Ecotrack Section */}
+                        {renderEcotrackSection(order)}
                       </div>
                     </td>
                   </tr>
@@ -362,6 +606,8 @@ export default function OrdersClient({ initialOrders }: Props) {
                     <span className="text-[10px] text-muted font-body">{item.color_name} / {item.size_label} ×{item.quantity}</span>
                   </div>
                 ))}
+                {/* Ecotrack Section — mobile */}
+                {renderEcotrackSection(order)}
               </div>
             )}
           </div>
@@ -388,6 +634,112 @@ export default function OrdersClient({ initialOrders }: Props) {
           >
             التالي
           </button>
+        </div>
+      )}
+
+      {/* Confirm dialog */}
+      {confirmDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setConfirmDialog(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                <AlertTriangle size={24} className="text-red-500" />
+              </div>
+              <p className="font-body text-sm text-brand">{confirmDialog.message}</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm border border-border text-muted hover:bg-surface transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm text-white bg-red-600 hover:bg-red-700 transition-colors"
+              >
+                تأكيد
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className={cn(
+          'fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-5 py-3 rounded-full text-sm font-heading font-bold text-white shadow-lg pointer-events-none',
+          toast.type === 'error' ? 'bg-red-600' : 'bg-green-600'
+        )}>
+          {toast.message}
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editingOrder && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setEditingOrder(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <button onClick={() => setEditingOrder(null)}>
+                <X size={20} className="text-muted" />
+              </button>
+              <h3 className="font-heading font-black text-lg text-brand">تعديل البوليصة</h3>
+            </div>
+            <p className="text-xs text-muted font-body text-right" dir="ltr">
+              {editingOrder.ecotrack_tracking}
+            </p>
+            <div className="space-y-3">
+              {[
+                { label: 'الهاتف', key: 'tel', placeholder: '0600000000' },
+                { label: 'الهاتف 2', key: 'tel2', placeholder: '0600000000' },
+                { label: 'العنوان', key: 'adresse', placeholder: 'العنوان الكامل' },
+                { label: 'البلدية', key: 'commune', placeholder: 'البلدية' },
+                { label: 'ملاحظات', key: 'remarque', placeholder: 'ملاحظات إضافية' },
+              ].map(({ label, key, placeholder }) => (
+                <div key={key}>
+                  <label className="block text-xs font-heading font-bold text-brand mb-1 text-right">
+                    {label}
+                  </label>
+                  <input
+                    value={editForm[key as keyof typeof editForm]}
+                    onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                    placeholder={placeholder}
+                    className="w-full bg-surface border border-border rounded-xl px-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand text-right"
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setEditingOrder(null)}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm border border-border text-muted"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={updateEcotrackOrder}
+                disabled={ecotrackLoading[`${editingOrder.id}-update`]}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm text-white"
+                style={{ backgroundColor: '#8B1A2E' }}
+              >
+                {ecotrackLoading[`${editingOrder.id}-update`] ? 'جارٍ الحفظ...' : 'حفظ التعديلات'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
