@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ShoppingBag, Package, PlusCircle, LogOut, MessageSquare, Settings } from 'lucide-react'
+import { ShoppingBag, Package, PlusCircle, LogOut, MessageSquare, Settings, BarChart2 } from 'lucide-react'
 import { signOut } from '@/app/admin/actions'
 import { cn } from '@/lib/utils'
 
@@ -11,7 +11,8 @@ const tabs = [
   { href: '/admin/reviews', label: 'التقييمات', icon: MessageSquare, exact: true },
   { href: '/admin/products', label: 'المنتجات', icon: Package, exact: false },
   { href: '/admin/products/new', label: 'إضافة', icon: PlusCircle, exact: true },
-  { href: '/admin/settings', label: 'الإعدادات', icon: Settings, exact: true },
+  { href: '/admin/stats',    label: 'إحصاءات',   icon: BarChart2, exact: true },
+  { href: '/admin/settings', label: 'الإعدادات', icon: Settings,  exact: true },
 ]
 
 export default function AdminBottomNav() {

@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useMemo, useEffect } from 'react'
-import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, X, AlertTriangle } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, X, AlertTriangle, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import type { Order } from '@/lib/types'
@@ -44,10 +44,41 @@ export default function OrdersClient({ initialOrders }: Props) {
     onConfirm: () => void;
   } | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
+  }
+
+  const syncWithEcotrack = async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/ecotrack/sync', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        const supabase = createClient()
+        const { data: freshOrders } = await supabase
+          .from('orders')
+          .select('*, order_items(*)')
+          .order('created_at', { ascending: false })
+        if (freshOrders) setOrders(freshOrders as Order[])
+        const { updated, imported } = data
+        const msg =
+          updated === 0 && imported === 0
+            ? 'لا يوجد تغييرات جديدة'
+            : imported === 0
+              ? `تم تحديث ${updated} طلب`
+              : `تم تحديث ${updated} طلب وإضافة ${imported} طلب جديد`
+        showToast(msg, 'success')
+      } else {
+        showToast('فشلت المزامنة مع Ecotrack', 'error')
+      }
+    } catch {
+      showToast('خطأ في الاتصال بـ Ecotrack', 'error')
+    } finally {
+      setSyncing(false)
+    }
   }
 
   useEffect(() => {
@@ -125,7 +156,7 @@ export default function OrdersClient({ initialOrders }: Props) {
             body: JSON.stringify({ order_id: orderId, tracking }),
           })
           const data = await res.json()
-          if (data.success || data.success === undefined) {
+          if (data.success) {
             setOrders(prev => prev.map(o =>
               o.id === orderId ? { ...o, ecotrack_status: 'shipped' as const } : o
             ))
@@ -152,7 +183,7 @@ export default function OrdersClient({ initialOrders }: Props) {
             body: JSON.stringify({ order_id: orderId, tracking }),
           })
           const data = await res.json()
-          if (data.success || data.success === undefined) {
+          if (data.success) {
             setOrders(prev => prev.map(o =>
               o.id === orderId
                 ? { ...o, ecotrack_tracking: null, ecotrack_status: 'none' as const }
@@ -187,7 +218,7 @@ export default function OrdersClient({ initialOrders }: Props) {
         }),
       })
       const data = await res.json()
-      if (data.success || data.success === undefined) {
+      if (data.success) {
         setEditingOrder(null)
         showToast('تم التعديل بنجاح ✓', 'success')
       } else {
@@ -200,6 +231,8 @@ export default function OrdersClient({ initialOrders }: Props) {
 
   // ── Status update ─────────────────────────────────────────
   const updateStatus = async (orderId: string, status: OrderStatus) => {
+    const currentOrder = orders.find(o => o.id === orderId)
+    const needsDraft = status === 'confirmed' && !currentOrder?.ecotrack_tracking
     const supabase = createClient()
     const { error } = await supabase
       .from('orders')
@@ -207,11 +240,7 @@ export default function OrdersClient({ initialOrders }: Props) {
       .eq('id', orderId)
     if (!error) {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o))
-      // Auto-create Ecotrack draft when confirmed
-      const order = orders.find(o => o.id === orderId)
-      if (status === 'confirmed' && !order?.ecotrack_tracking) {
-        await createDraft(orderId)
-      }
+      if (needsDraft) await createDraft(orderId)
     }
   }
 
@@ -331,6 +360,25 @@ export default function OrdersClient({ initialOrders }: Props) {
         <span className="bg-brand text-white text-xs font-bold font-heading px-2.5 py-1 rounded-full">
           {orders.length}
         </span>
+        <button
+          onClick={syncWithEcotrack}
+          disabled={syncing}
+          className={cn(
+            'group mr-auto flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all duration-200 text-sm font-heading font-bold',
+            'border-brand/20 bg-brand/5 text-brand hover:bg-brand hover:border-brand hover:text-white',
+            'disabled:opacity-60 disabled:pointer-events-none shadow-sm hover:shadow-md active:scale-95'
+          )}
+          aria-label="مزامنة مع Ecotrack"
+        >
+          <RefreshCw
+            size={15}
+            className={cn(
+              'transition-transform duration-300',
+              syncing ? 'animate-spin' : 'group-hover:rotate-180'
+            )}
+          />
+          <span>{syncing ? 'جارٍ المزامنة...' : 'مزامنة Ecotrack'}</span>
+        </button>
       </div>
 
       {/* Stats row */}

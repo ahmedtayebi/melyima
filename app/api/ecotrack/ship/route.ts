@@ -5,6 +5,8 @@ import { ecotrackShipOrder } from '@/lib/ecotrack'
 export async function POST(req: NextRequest) {
   try {
     const { order_id, tracking } = await req.json()
+    if (!order_id || !tracking) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
+
     const result = await ecotrackShipOrder(tracking)
 
     if (!result.success) {
@@ -16,10 +18,12 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
     )
 
-    await supabase
+    const { error: dbError } = await supabase
       .from('orders')
       .update({ ecotrack_status: 'shipped' })
       .eq('id', order_id)
+
+    if (dbError) return NextResponse.json({ success: false, error: 'DB update failed' }, { status: 500 })
 
     return NextResponse.json({ success: true })
   } catch {

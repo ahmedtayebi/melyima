@@ -5,7 +5,6 @@ import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    console.log('Update route received:', body)
     const { tracking, order_id, adresse, commune, montant, tel, tel2, remarque } = body
     if (!tracking) return NextResponse.json({ success: false, error: 'tracking required' }, { status: 400 })
 
@@ -32,6 +31,18 @@ export async function POST(req: NextRequest) {
     })
 
     if (!result.success) return NextResponse.json({ success: false, error: result.message }, { status: 400 })
+
+    const dbFields: Record<string, string | undefined> = {}
+    if (adresse)  dbFields.address = adresse
+    if (commune)  dbFields.commune = commune
+    if (tel)      dbFields.phone   = tel
+    if (tel2)     dbFields.phone2  = tel2
+    if (remarque) dbFields.notes   = remarque
+
+    if (Object.keys(dbFields).length > 0) {
+      await supabase.from('orders').update(dbFields).eq('id', order_id)
+    }
+
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

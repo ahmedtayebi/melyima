@@ -5,8 +5,9 @@ import { ecotrackDeleteOrder } from '@/lib/ecotrack'
 export async function DELETE(req: NextRequest) {
   try {
     const { order_id, tracking } = await req.json()
+    if (!order_id || !tracking) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
+
     const result = await ecotrackDeleteOrder(tracking)
-    console.log('Ecotrack delete response:', result)
 
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.message }, { status: 400 })
@@ -17,10 +18,12 @@ export async function DELETE(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
     )
 
-    await supabase
+    const { error: dbError } = await supabase
       .from('orders')
       .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
       .eq('id', order_id)
+
+    if (dbError) return NextResponse.json({ success: false, error: 'DB update failed' }, { status: 500 })
 
     return NextResponse.json({ success: true })
   } catch {

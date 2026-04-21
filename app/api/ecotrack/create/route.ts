@@ -5,6 +5,7 @@ import { ecotrackCreateOrder, WILAYA_CODES, WILAYA_CODE_BY_NUMBER } from '@/lib/
 export async function POST(req: NextRequest) {
   try {
     const { order_id } = await req.json()
+    if (!order_id) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
@@ -26,14 +27,10 @@ export async function POST(req: NextRequest) {
       0
     if (!code_wilaya) return NextResponse.json({ success: false, error: `Wilaya not found: ${order.wilaya}` }, { status: 400 })
 
-    console.log('order_items:', order.order_items)
-
     const produit = (order.order_items ?? [])
       .map((i: { product_name: string; quantity: number }) => `${i.product_name} x${i.quantity}`)
       .join(', ')
       .substring(0, 255)
-
-    console.log('produit string:', produit)
 
     const result = await ecotrackCreateOrder({
       nom_client: order.customer_name,
@@ -53,10 +50,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: result.message }, { status: 400 })
     }
 
-    await supabase
+    const { error: dbError } = await supabase
       .from('orders')
       .update({ ecotrack_tracking: result.tracking, ecotrack_status: 'draft' })
       .eq('id', order_id)
+
+    if (dbError) return NextResponse.json({ success: false, error: 'DB update failed' }, { status: 500 })
 
     return NextResponse.json({ success: true, tracking: result.tracking })
   } catch {

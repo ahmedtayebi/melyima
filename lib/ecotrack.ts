@@ -162,13 +162,11 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
     if (params.tel2) query.set('tel2', params.tel2)
     if (params.remarque) query.set('remarque', params.remarque)
 
-    console.log('Update request params:', query.toString())
     const res = await fetch(`${BASE_URL}/api/v1/update/order?${query}`, {
       method: 'POST',
       headers: { 'Accept': 'application/json' },
     })
     const data = await res.json().catch(() => ({}))
-    console.log('Update response status:', res.status, 'body:', data)
     return { success: res.ok, message: data.message }
   } catch {
     return { success: false, message: 'Network error' }
