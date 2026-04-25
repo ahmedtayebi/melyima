@@ -64,6 +64,8 @@ export interface Order {
   created_at: string
   updated_at: string
   order_items?: OrderItem[]
+  ecotrack_tracking?: string | null
+  ecotrack_status?: 'none' | 'draft' | 'shipped' | null
 }
 
 export interface OrderItem {
@@ -85,6 +87,7 @@ export interface Review {
   comment: string
   status: 'pending' | 'approved' | 'rejected'
   created_at: string
+  images?: string[]
 }
 
 export interface StoreSettings {

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2 } from 'lucide-react'
 import { useCartStore } from '@/lib/cart-store'
@@ -67,13 +68,19 @@ export default function ProductCard({ product }: { product: Product }) {
         onMouseLeave={() => setImageHovered(false)}
       >
         {selectedColor?.image_url ? (
-          <motion.img
-            src={selectedColor.image_url}
-            alt={product.name}
+          <motion.div
             animate={{ scale: imageHovered ? 1.07 : 1 }}
             transition={{ duration: 0.4, ease: 'easeOut' }}
-            className="w-full h-full object-cover"
-          />
+            className="w-full h-full relative"
+          >
+            <Image
+              src={selectedColor.image_url}
+              alt={product.name}
+              fill
+              className="object-cover"
+              sizes="(max-width: 768px) 42vw, 280px"
+            />
+          </motion.div>
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <span className="font-heading font-black text-5xl" style={{ color: '#EAE0D4' }}>

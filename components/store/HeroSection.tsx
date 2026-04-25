@@ -256,7 +256,7 @@ export default function HeroSection() {
                 >
                   <Image
                     src="/pogo.png"
-                    alt="MELY•IMA"
+                    alt="عباءة نسائية عصرية من MELY•IMA"
                     width={700}
                     height={300}
                     className="object-contain select-none"

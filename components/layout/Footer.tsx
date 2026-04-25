@@ -37,9 +37,11 @@ const SOCIAL = [
 ]
 
 const QUICK_LINKS = [
-  { label: 'التشكيلة', href: '#products' },
-  { label: 'من نحن', href: '#statement' },
-  { label: 'اطلبي الآن', href: '#products' },
+  { label: 'التشكيلة', href: '/#products' },
+  { label: 'الجديد', href: '/new-arrivals' },
+  { label: 'الأكثر مبيعاً', href: '/best-sellers' },
+  { label: 'التخفيضات', href: '/discounts' },
+  { label: 'من نحن', href: '/#statement' },
 ]
 
 const CONTACT = [
@@ -95,7 +97,7 @@ export default function Footer() {
             <div className="flex justify-right w-full">
               <Image
                 src="/logo.png"
-                alt="MELY•IMA"
+                alt=""
                 width={500}
                 height={200}
                 

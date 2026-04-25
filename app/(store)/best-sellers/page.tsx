@@ -1,5 +1,17 @@
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { TrendingUp } from 'lucide-react'
+
+export const metadata: Metadata = {
+  title: 'الأكثر مبيعاً',
+  description: 'اكتشفي الأكثر مبيعاً من عباءات MELY•IMA — التشكيلات التي تحظى بأعلى إقبال من زبوناتنا في الجزائر.',
+  alternates: { canonical: 'https://melyima.com/best-sellers' },
+  openGraph: {
+    title: 'الأكثر مبيعاً | MELY•IMA',
+    description: 'أكثر العباءات النسائية مبيعاً من MELY•IMA في الجزائر.',
+    url: 'https://melyima.com/best-sellers',
+  },
+}
 import ProductCard from '@/components/store/ProductCard'
 import type { Product } from '@/lib/types'
 

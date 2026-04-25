@@ -1,5 +1,17 @@
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { Tag } from 'lucide-react'
+
+export const metadata: Metadata = {
+  title: 'التخفيضات',
+  description: 'اكتشفي أجمل عروض وتخفيضات العباءات النسائية من MELY•IMA — أسعار مخفضة على أحدث التشكيلات. توصيل لجميع ولايات الجزائر.',
+  alternates: { canonical: 'https://melyima.com/discounts' },
+  openGraph: {
+    title: 'التخفيضات | MELY•IMA',
+    description: 'أسعار مخفضة على أجمل تشكيلات العباءات النسائية العصرية في الجزائر.',
+    url: 'https://melyima.com/discounts',
+  },
+}
 import ProductCard from '@/components/store/ProductCard'
 import type { Product } from '@/lib/types'
 

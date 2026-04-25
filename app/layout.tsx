@@ -15,7 +15,7 @@ const dmSans = DM_Sans({
   weight: ["400", "500"],
 });
 
-const BASE_URL = 'https://meli-theta.vercel.app'
+const BASE_URL = 'https://melyima.com'
 
 export const metadata: Metadata = {
   metadataBase: new URL(BASE_URL),
@@ -45,18 +45,17 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'ar_DZ',
-    alternateLocale: ['fr_DZ'],
+
     url: BASE_URL,
     siteName: 'MELY•IMA',
     title: 'MELY•IMA — عباءات نسائية عصرية',
     description: 'اكتشفي أجمل تشكيلات العباءات النسائية العصرية من MELY•IMA — توصيل لجميع ولايات الجزائر.',
     images: [
       {
-        url: '/og-image.jpg',
+        url: '/opengraph-image',
         width: 1200,
         height: 630,
         alt: 'MELY•IMA — عباءات نسائية عصرية',
-        type: 'image/jpeg',
       },
     ],
   },
@@ -65,7 +64,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'MELY•IMA — عباءات نسائية عصرية',
     description: 'اكتشفي أجمل تشكيلات العباءات النسائية العصرية من MELY•IMA',
-    images: ['/og-image.jpg'],
+    images: ['/opengraph-image'],
   },
 
   robots: {
@@ -82,6 +81,10 @@ export const metadata: Metadata = {
     },
   },
 
+  alternates: {
+    canonical: 'https://melyima.com',
+  },
+
   applicationName: 'MELY•IMA',
   category: 'shopping',
 };
@@ -93,7 +96,31 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl" className={`${notoKufi.variable} ${dmSans.variable}`} suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        {children}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'ClothingStore',
+              name: 'MELY•IMA',
+              url: 'https://melyima.com',
+              logo: 'https://melyima.com/logo.png',
+              telephone: '0665967348',
+              address: {
+                '@type': 'PostalAddress',
+                addressLocality: 'بسكرة',
+                addressCountry: 'DZ',
+              },
+              sameAs: [
+                'https://www.instagram.com/mely_ima',
+                'https://www.facebook.com/share/1KoHWcP4Dm/',
+              ],
+            }),
+          }}
+        />
+      </body>
     </html>
   );
 }

@@ -1,7 +1,22 @@
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
+import { createStaticClient } from '@/lib/supabase/static'
 import { notFound } from 'next/navigation'
 import ProductCard from '@/components/store/ProductCard'
 import type { Product } from '@/lib/types'
+
+const BASE_URL = 'https://melyima.com'
+
+export const revalidate = 3600
+
+export async function generateStaticParams() {
+  const supabase = createStaticClient()
+  const { data } = await supabase
+    .from('categories')
+    .select('id')
+    .eq('is_visible', true)
+  return (data ?? []).map(c => ({ id: c.id }))
+}
 
 interface Props {
   params: Promise<{ id: string }>
@@ -38,6 +53,36 @@ const mapProduct = (p: any): Product => ({
       arr.findIndex((t: any) => t.label === s.label) === i)
     .sort((a: any, b: any) => a.sort_order - b.sort_order),
 })
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params
+  const supabase = await createClient()
+
+  const { data: category } = await supabase
+    .from('categories')
+    .select('name')
+    .eq('id', id)
+    .eq('is_visible', true)
+    .single()
+
+  if (!category) return {}
+
+  const title = category.name
+  const description = `تصفحي تشكيلة ${category.name} من MELY•IMA — عباءات نسائية عصرية بجودة مضمونة. توصيل لجميع ولايات الجزائر.`
+
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: `${BASE_URL}/category/${id}`,
+    },
+    openGraph: {
+      title: `${title} | MELY•IMA`,
+      description,
+      url: `${BASE_URL}/category/${id}`,
+    },
+  }
+}
 
 export default async function CategoryPage({ params }: Props) {
   const { id } = await params

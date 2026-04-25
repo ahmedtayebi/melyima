@@ -4,4 +4,4 @@ Disallow: /admin/
 Disallow: /api/
 Disallow: /_next/
 
-Sitemap: https://meli-theta.vercel.app/sitemap.xml
+Sitemap: https://melyima.com/sitemap.xml
