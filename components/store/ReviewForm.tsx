@@ -162,8 +162,8 @@ export default function ReviewForm() {
               >
                 <Star
                   size={32}
-                  fill={(hoveredRating || formData.rating) >= star ? '#8B1A2E' : 'none'}
-                  stroke={(hoveredRating || formData.rating) >= star ? '#8B1A2E' : '#E8E4DF'}
+                  fill={(hoveredRating || formData.rating) >= star ? '#B8872E' : 'none'}
+                  stroke={(hoveredRating || formData.rating) >= star ? '#B8872E' : '#E8DDD0'}
                   strokeWidth={1.5}
                 />
               </button>
