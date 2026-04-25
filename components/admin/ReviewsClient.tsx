@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Star, Check, X } from 'lucide-react'
+import { Star, Check, X, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import type { Review } from '@/lib/types'
@@ -31,6 +31,11 @@ function StarDisplay({ rating }: { rating: number }) {
 export default function ReviewsClient({ initialReviews }: { initialReviews: Review[] }) {
   const [reviews, setReviews] = useState<Review[]>(initialReviews)
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string
+    onConfirm: () => void
+  } | null>(null)
 
   const supabase = createClient()
 
@@ -44,10 +49,15 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
     }
   }
 
-  const deleteReview = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا التقييم؟')) return
-    const { error } = await supabase.from('reviews').delete().eq('id', id)
-    if (!error) setReviews(prev => prev.filter(r => r.id !== id))
+  const deleteReview = (id: string) => {
+    setConfirmDialog({
+      message: 'هل أنت متأكد من حذف هذا التقييم؟',
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        const { error } = await supabase.from('reviews').delete().eq('id', id)
+        if (!error) setReviews(prev => prev.filter(r => r.id !== id))
+      },
+    })
   }
 
   const filtered = filter === 'all' ? reviews : reviews.filter(r => r.status === filter)
@@ -170,9 +180,83 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
               "{review.comment}"
             </p>
 
+            {/* Images */}
+            {review.images && review.images.length > 0 && (
+              <div className="flex gap-2 justify-end flex-wrap">
+                {review.images.filter(Boolean).map((url, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={i}
+                    src={url}
+                    alt=""
+                    onClick={() => setLightbox(url)}
+                    className="w-16 h-16 rounded-lg object-cover cursor-pointer border border-border hover:opacity-90 transition-opacity duration-150 flex-shrink-0"
+                  />
+                ))}
+              </div>
+            )}
+
           </div>
         ))}
       </div>
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setLightbox(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightbox}
+            alt=""
+            className="max-w-lg max-h-[80vh] object-contain rounded-xl shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors"
+            onClick={() => setLightbox(null)}
+          >
+            <X size={18} className="text-white" />
+          </button>
+        </div>
+      )}
+
+      {/* Confirm dialog */}
+      {confirmDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setConfirmDialog(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                <AlertTriangle size={24} className="text-red-500" />
+              </div>
+              <p className="font-body text-sm text-brand">{confirmDialog.message}</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm border border-border text-muted hover:bg-surface transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm text-white bg-red-600 hover:bg-red-700 transition-colors"
+              >
+                تأكيد الحذف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

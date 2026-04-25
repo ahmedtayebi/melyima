@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { ecotrackDeleteOrder } from '@/lib/ecotrack'
+import { requireAdmin } from '../_auth'
 
 export async function DELETE(req: NextRequest) {
   try {
+    const auth = await requireAdmin()
+    if (auth instanceof NextResponse) return auth
+
     const { order_id, tracking } = await req.json()
     if (!order_id || !tracking) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
 

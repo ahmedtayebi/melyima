@@ -87,6 +87,7 @@ export interface Review {
   comment: string
   status: 'pending' | 'approved' | 'rejected'
   created_at: string
+  images?: string[]
 }
 
 export interface StoreSettings {

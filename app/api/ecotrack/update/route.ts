@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
+import { requireAdmin } from '../_auth'
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireAdmin()
+    if (auth instanceof NextResponse) return auth
+
     const body = await req.json()
     const { tracking, order_id, adresse, commune, montant, tel, tel2, remarque } = body
-    if (!tracking) return NextResponse.json({ success: false, error: 'tracking required' }, { status: 400 })
+    if (!tracking || !order_id) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -40,7 +44,8 @@ export async function POST(req: NextRequest) {
     if (remarque) dbFields.notes   = remarque
 
     if (Object.keys(dbFields).length > 0) {
-      await supabase.from('orders').update(dbFields).eq('id', order_id)
+      const { error: dbError } = await supabase.from('orders').update(dbFields).eq('id', order_id)
+      if (dbError) return NextResponse.json({ success: false, error: 'DB update failed' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })

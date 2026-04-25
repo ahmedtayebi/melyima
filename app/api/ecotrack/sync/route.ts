@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { requireAdmin } from '../_auth'
 
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
@@ -44,17 +45,19 @@ async function fetchAllPages(url: string, label: string): Promise<EcotrackOrder[
     } else {
       results.push(...rows)
       const lastPage: number = body.last_page ?? body.meta?.last_page ?? page
-      if (page >= lastPage) hasMore = false
+      if (page >= lastPage || page >= 200) hasMore = false
       else page++
     }
   }
 
-  console.log(`[${label}] fetched ${results.length} orders`)
   return results
 }
 
 export async function POST() {
   try {
+    const auth = await requireAdmin()
+    if (auth instanceof NextResponse) return auth
+
     // ── Fetch all orders from Ecotrack ────────────────────────
     const allOrders = await fetchAllPages(
       `${BASE_URL}/api/v1/get/orders?api_token=${TOKEN}&per_page=${PER_PAGE}`,
@@ -71,10 +74,14 @@ export async function POST() {
     )
 
     const trackingNumbers = allOrders.map(o => o.tracking).filter(Boolean)
-    const { data: dbOrders } = await supabase
+    const { data: dbOrders, error: dbQueryError } = await supabase
       .from('orders')
       .select('id, ecotrack_tracking')
       .in('ecotrack_tracking', trackingNumbers)
+
+    if (dbQueryError) {
+      return NextResponse.json({ success: false, error: 'DB query failed' }, { status: 500 })
+    }
 
     // ── Phase 1: update existing orders ──────────────────────
     let updated = 0
@@ -114,7 +121,7 @@ export async function POST() {
         const isOffice = item.stop_desk === 1
         const delivery_price = deliveryEntry ? (isOffice ? deliveryEntry.office : deliveryEntry.home) : 0
         const total_price = Number(item.montant)
-        const products_total = total_price - delivery_price
+        const products_total = Math.max(0, total_price - delivery_price)
 
         return {
           customer_name: item.client,

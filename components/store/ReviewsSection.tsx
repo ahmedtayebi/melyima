@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Star, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react'
+import { Star, ChevronLeft, ChevronRight, MessageSquare, X } from 'lucide-react'
 import { motion, useInView, AnimatePresence } from 'framer-motion'
 import ReviewForm from './ReviewForm'
 import type { Review } from '@/lib/types'
@@ -22,11 +22,12 @@ function StarRating({ rating }: { rating: number }) {
   )
 }
 
-function ReviewCard({ review, index }: { review: Review; index: number }) {
+function ReviewCard({ review, index, onImageClick }: { review: Review; index: number; onImageClick: (url: string) => void }) {
   const date = new Date(review.created_at).toLocaleDateString('ar-DZ', {
     year: 'numeric',
     month: 'long',
   })
+  const photos = review.images?.filter(Boolean) ?? []
 
   return (
     <motion.div
@@ -46,6 +47,21 @@ function ReviewCard({ review, index }: { review: Review; index: number }) {
       <p className="font-body text-brand/80 text-sm leading-relaxed text-right flex-1 line-clamp-4">
         "{review.comment}"
       </p>
+
+      {photos.length > 0 && (
+        <div className="flex gap-2 justify-end">
+          {photos.map((url, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={i}
+              src={url}
+              alt=""
+              onClick={() => onImageClick(url)}
+              className="w-20 h-20 rounded-lg object-cover cursor-pointer border border-border hover:opacity-90 transition-opacity duration-150 flex-shrink-0"
+            />
+          ))}
+        </div>
+      )}
 
       <div className="flex items-center justify-end gap-3 pt-3 border-t border-border">
         <div className="text-right">
@@ -71,6 +87,7 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
   const inView = useInView(ref, { once: true, margin: '-80px' })
   const [showForm, setShowForm] = useState(false)
   const [scrollIndex, setScrollIndex] = useState(0)
+  const [lightbox, setLightbox] = useState<string | null>(null)
   const visibleCount = 3
 
   const canPrev = scrollIndex > 0
@@ -186,7 +203,7 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
                   className="flex gap-5"
                 >
                   {reviews.map((review, i) => (
-                    <ReviewCard key={review.id} review={review} index={i} />
+                    <ReviewCard key={review.id} review={review} index={i} onImageClick={setLightbox} />
                   ))}
                 </motion.div>
               </div>
@@ -224,7 +241,7 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
             >
               {reviews.map((review, i) => (
                 <div key={review.id} className="snap-start">
-                  <ReviewCard review={review} index={i} />
+                  <ReviewCard review={review} index={i} onImageClick={setLightbox} />
                 </div>
               ))}
             </div>
@@ -232,6 +249,38 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
         )}
 
       </div>
+
+      {/* Lightbox */}
+      <AnimatePresence>
+        {lightbox && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setLightbox(null)}
+          >
+            <motion.img
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              src={lightbox}
+              alt=""
+              className="max-w-full max-h-full rounded-2xl object-contain shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            />
+            <button
+              type="button"
+              className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors"
+              onClick={() => setLightbox(null)}
+            >
+              <X size={18} className="text-white" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   )
 }

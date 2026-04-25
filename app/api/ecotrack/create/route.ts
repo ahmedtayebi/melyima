@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { ecotrackCreateOrder, WILAYA_CODES, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
+import { requireAdmin } from '../_auth'
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireAdmin()
+    if (auth instanceof NextResponse) return auth
+
     const { order_id } = await req.json()
     if (!order_id) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
     const supabase = createClient(
