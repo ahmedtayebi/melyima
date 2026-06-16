@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
+type IncomingOrderItem = {
+  product_id?: string | null
+  product_name: string
+  color_id: string
+  color_name: string
+  color_hex: string
+  color_image_url?: string | null
+  size_id: string
+  size_label: string
+  quantity: number
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -16,7 +28,17 @@ export async function POST(req: NextRequest) {
       !phone?.trim() ||
       !wilaya ||
       !Array.isArray(items) ||
-      items.length === 0
+      items.length === 0 ||
+      items.some((item: Partial<IncomingOrderItem>) =>
+        !item.color_id ||
+        !item.size_id ||
+        !item.product_name ||
+        !item.color_name ||
+        !item.color_hex ||
+        !item.size_label ||
+        !Number.isFinite(Number(item.quantity)) ||
+        Number(item.quantity) <= 0
+      )
     ) {
       return NextResponse.json(
         { success: false, error: 'بيانات غير مكتملة' },
@@ -35,6 +57,37 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
     )
+
+    const safeItems = items as IncomingOrderItem[]
+    const trackedItems: IncomingOrderItem[] = []
+
+    // Missing variants are treated as unlimited stock for backward compatibility.
+    for (const item of safeItems) {
+      const { data: variant, error: variantError } = await supabase
+        .from('product_variants')
+        .select('stock')
+        .eq('color_id', item.color_id)
+        .eq('size_id', item.size_id)
+        .maybeSingle()
+
+      if (variantError) {
+        console.error('Stock check error:', variantError)
+        return NextResponse.json(
+          { success: false, error: 'تعذّر التحقق من المخزون' },
+          { status: 500 }
+        )
+      }
+
+      if (!variant) continue
+      trackedItems.push(item)
+
+      if (Number(variant.stock) < Number(item.quantity)) {
+        return NextResponse.json(
+          { success: false, error: 'المنتج غير متوفر بالكمية المطلوبة' },
+          { status: 400 }
+        )
+      }
+    }
 
     // ── Insert order ──────────────────────────────────────────
     const { data: order, error: orderError } = await supabase
@@ -66,7 +119,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Insert order items ────────────────────────────────────
-    const orderItems = (items as any[]).map((item) => ({
+    const orderItems = safeItems.map((item) => ({
       order_id: order.id,
       product_id: item.product_id ?? null,
       product_name: String(item.product_name),
@@ -88,6 +141,23 @@ export async function POST(req: NextRequest) {
         { success: false, error: 'تعذّر حفظ تفاصيل الطلب' },
         { status: 500 }
       )
+    }
+
+    // ── Decrement managed stock ───────────────────────────────
+    for (const item of trackedItems) {
+      const { error: stockError } = await supabase.rpc('decrement_stock', {
+        p_color_id: item.color_id,
+        p_size_id: item.size_id,
+        p_quantity: Number(item.quantity),
+      })
+
+      if (stockError) {
+        console.error('Stock decrement error:', stockError)
+        return NextResponse.json(
+          { success: false, error: 'تعذّر تحديث المخزون' },
+          { status: 500 }
+        )
+      }
     }
 
     return NextResponse.json({ success: true, order_id: order.id })

@@ -19,6 +19,7 @@ export interface Product {
   updated_at: string
   product_colors?: ProductColor[]
   product_sizes?: ProductSize[]
+  product_variants?: ProductVariant[]
 }
 
 export interface ProductColorImage {
@@ -44,6 +45,14 @@ export interface ProductSize {
   label: string
   is_visible: boolean
   sort_order: number
+}
+
+export interface ProductVariant {
+  id: string
+  product_id: string
+  color_id: string
+  size_id: string
+  stock: number
 }
 
 export interface Order {

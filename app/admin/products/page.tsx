@@ -10,7 +10,8 @@ export default async function AdminProductsPage() {
       .select(
         `id, name, price, is_visible, category_id, created_at, updated_at,
          product_colors(id, product_id, name, hex_code, image_url, is_visible),
-         product_sizes(id, product_id, label, is_visible, sort_order)`
+         product_sizes(id, product_id, label, is_visible, sort_order),
+         product_variants(id, product_id, color_id, size_id, stock)`
       )
       .order('created_at', { ascending: false }),
     supabase

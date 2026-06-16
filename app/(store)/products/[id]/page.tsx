@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createStaticClient } from '@/lib/supabase/static'
 import { notFound } from 'next/navigation'
 import ProductDetail from '@/components/store/ProductDetail'
-import type { Product } from '@/lib/types'
+import type { Product, ProductVariant } from '@/lib/types'
 
 const BASE_URL = 'https://melyima.com'
 
@@ -72,7 +72,7 @@ export default async function ProductPage({ params }: Props) {
   const { id } = await params
   const supabase = await createClient()
 
-  const [{ data }, { data: settingsData }] = await Promise.all([
+  const [{ data }, { data: settingsData }, { data: variantsData }] = await Promise.all([
     supabase
       .from('products')
       .select(`
@@ -91,6 +91,10 @@ export default async function ProductPage({ params }: Props) {
       .select('key, value')
       .eq('key', 'store_policy')
       .single(),
+    supabase
+      .from('product_variants')
+      .select('id, product_id, color_id, size_id, stock')
+      .eq('product_id', id),
   ])
 
   if (!data) notFound()
@@ -112,6 +116,7 @@ export default async function ProductPage({ params }: Props) {
     product_sizes: (data.product_sizes ?? [])
       .filter((s: any) => s.is_visible)
       .sort((a: any, b: any) => a.sort_order - b.sort_order),
+    product_variants: (variantsData ?? []) as ProductVariant[],
   }
 
   const firstImage =
@@ -142,7 +147,11 @@ export default async function ProductPage({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <ProductDetail product={product} storePolicy={storePolicy} />
+      <ProductDetail
+        product={product}
+        storePolicy={storePolicy}
+        productVariants={(variantsData ?? []) as ProductVariant[]}
+      />
     </>
   )
 }

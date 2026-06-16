@@ -7,9 +7,17 @@ import { useCartStore } from '@/lib/cart-store'
 import { getDiscountPercent, hasDiscount } from '@/lib/discount'
 import Modal from '@/components/ui/Modal'
 import OrderForm from './OrderForm'
-import type { Product } from '@/lib/types'
+import type { Product, ProductVariant } from '@/lib/types'
 
-export default function ProductDetail({ product, storePolicy }: { product: Product; storePolicy: string }) {
+export default function ProductDetail({
+  product,
+  storePolicy,
+  productVariants = product.product_variants ?? [],
+}: {
+  product: Product
+  storePolicy: string
+  productVariants?: ProductVariant[]
+}) {
   const visibleColors = product.product_colors?.filter(c => c.is_visible) ?? []
   const visibleSizes = product.product_sizes?.filter(s => s.is_visible)
     .filter((s, i, arr) => arr.findIndex(t => t.label === s.label) === i) ?? []
@@ -29,13 +37,18 @@ export default function ProductDetail({ product, storePolicy }: { product: Produ
       ? [selectedColor.image_url]
       : []
 
+  const selectedVariant = selectedColor && selectedSizeId
+    ? productVariants.find(v => v.color_id === selectedColor.id && v.size_id === selectedSizeId)
+    : undefined
+  const isOutOfStock = selectedVariant?.stock === 0
+
   const handleColorChange = useCallback((colorId: string) => {
     setSelectedColorId(colorId)
     setCurrentImageIndex(0)
   }, [])
 
   const handleAdd = () => {
-    if (!selectedSizeId || !selectedColor) return
+    if (!selectedSizeId || !selectedColor || isOutOfStock) return
     const size = visibleSizes.find(s => s.id === selectedSizeId)
     if (!size) return
     addItem({
@@ -55,7 +68,7 @@ export default function ProductDetail({ product, storePolicy }: { product: Produ
   }
 
   const handleBuyNow = () => {
-    if (!selectedSizeId || !selectedColor) return
+    if (!selectedSizeId || !selectedColor || isOutOfStock) return
     const size = visibleSizes.find(s => s.id === selectedSizeId)
     if (!size) return
 
@@ -271,21 +284,39 @@ export default function ProductDetail({ product, storePolicy }: { product: Produ
               </div>
             )}
 
+            {isOutOfStock && (
+              <div
+                className="inline-flex w-fit items-center self-end rounded-full px-3 py-1.5 text-xs font-heading font-bold"
+                style={{
+                  backgroundColor: 'rgba(184,135,46,0.12)',
+                  color: '#8B6420',
+                  border: '1px solid rgba(184,135,46,0.35)',
+                }}
+              >
+                غير متوفر حالياً
+              </div>
+            )}
 
             {/* Add to cart */}
             <button
               type="button"
               onClick={handleAdd}
-              disabled={!selectedSizeId || added}
+              disabled={!selectedSizeId || added || isOutOfStock}
               className="w-full h-14 rounded-2xl font-heading font-black text-base transition-all duration-200 flex items-center justify-center gap-2"
               style={{
-                backgroundColor: added ? '#16a34a' : selectedSizeId ? '#1a1a1a' : '#E8E4DF',
-                color: selectedSizeId || added ? '#ffffff' : '#6B6B6B',
-                cursor: !selectedSizeId ? 'not-allowed' : 'pointer',
+                backgroundColor: added
+                  ? '#16a34a'
+                  : selectedSizeId && !isOutOfStock
+                    ? '#1a1a1a'
+                    : '#E8E4DF',
+                color: (selectedSizeId && !isOutOfStock) || added ? '#ffffff' : '#6B6B6B',
+                cursor: !selectedSizeId || isOutOfStock ? 'not-allowed' : 'pointer',
               }}
             >
               {added ? (
                 <><Check size={18} /> تمت الإضافة</>
+              ) : isOutOfStock ? (
+                'غير متوفر حالياً'
               ) : selectedSizeId ? (
                 <><ShoppingBag size={18} /> إضافة للسلة</>
               ) : (
@@ -297,16 +328,16 @@ export default function ProductDetail({ product, storePolicy }: { product: Produ
             <button
               type="button"
               onClick={handleBuyNow}
-              disabled={!selectedSizeId}
+              disabled={!selectedSizeId || isOutOfStock}
               className="w-full h-14 rounded-2xl font-heading font-black text-base transition-all duration-200 flex items-center justify-center gap-2 border-2"
               style={{
                 backgroundColor: 'transparent',
-                color: selectedSizeId ? '#8B1A2E' : '#6B6B6B',
-                borderColor: selectedSizeId ? '#8B1A2E' : '#E8E4DF',
-                cursor: !selectedSizeId ? 'not-allowed' : 'pointer',
+                color: selectedSizeId && !isOutOfStock ? '#8B1A2E' : '#6B6B6B',
+                borderColor: selectedSizeId && !isOutOfStock ? '#8B1A2E' : '#E8E4DF',
+                cursor: !selectedSizeId || isOutOfStock ? 'not-allowed' : 'pointer',
               }}
             >
-              اطلبي الآن
+              {isOutOfStock ? 'غير متوفر حالياً' : 'اطلبي الآن'}
             </button>
             {product.description && (
               <div className="border-t border-border pt-6">
