@@ -125,6 +125,19 @@ export default function ProductDetail({
                   </div>
                 )}
 
+                {isOutOfStock && (
+                  <span
+                    className="absolute bottom-4 right-4 left-4 z-10 text-center font-heading font-black text-xs px-4 py-2 rounded-full"
+                    style={{
+                      background: 'rgba(26,20,16,0.86)',
+                      color: '#FFFFFF',
+                      border: '1px solid rgba(255,255,255,0.22)',
+                    }}
+                  >
+                    المنتج غير متوفر
+                  </span>
+                )}
+
                 {colorImages.length > 1 && (
                   <>
                     <button
@@ -189,6 +202,19 @@ export default function ProductDetail({
                   <div className="w-full h-full flex items-center justify-center">
                     <span className="font-heading font-black text-6xl text-border">M</span>
                   </div>
+                )}
+
+                {isOutOfStock && (
+                  <span
+                    className="absolute bottom-4 right-4 left-4 z-10 text-center font-heading font-black text-sm px-4 py-2 rounded-full"
+                    style={{
+                      background: 'rgba(26,20,16,0.86)',
+                      color: '#FFFFFF',
+                      border: '1px solid rgba(255,255,255,0.22)',
+                    }}
+                  >
+                    المنتج غير متوفر
+                  </span>
                 )}
               </div>
             </div>
@@ -281,19 +307,6 @@ export default function ProductDetail({
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {isOutOfStock && (
-              <div
-                className="inline-flex w-fit items-center self-end rounded-full px-3 py-1.5 text-xs font-heading font-bold"
-                style={{
-                  backgroundColor: 'rgba(184,135,46,0.12)',
-                  color: '#8B6420',
-                  border: '1px solid rgba(184,135,46,0.35)',
-                }}
-              >
-                غير متوفر حالياً
               </div>
             )}
 

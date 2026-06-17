@@ -22,9 +22,13 @@ export default function ProductCard({ product }: { product: Product }) {
 
   const addItem = useCartStore((s) => s.addItem)
   const selectedColor = visibleColors.find(c => c.id === selectedColorId) ?? visibleColors[0]
+  const selectedVariant = selectedColor && selectedSizeId
+    ? product.product_variants?.find(v => v.color_id === selectedColor.id && v.size_id === selectedSizeId)
+    : undefined
+  const isOutOfStock = selectedVariant?.stock === 0
 
   const handleAdd = () => {
-    if (!selectedSizeId || !selectedColor) return
+    if (!selectedSizeId || !selectedColor || isOutOfStock) return
     const size = visibleSizes.find(s => s.id === selectedSizeId)
     if (!size) return
     addItem({
@@ -105,6 +109,19 @@ export default function ProductCard({ product }: { product: Product }) {
             جديد
           </span>
         ) : null}
+
+        {isOutOfStock && (
+          <span
+            className="absolute bottom-2 right-2 left-2 z-10 text-center font-heading font-black text-[10px] px-2 py-1 rounded-full"
+            style={{
+              background: 'rgba(26,20,16,0.86)',
+              color: '#FFFFFF',
+              border: '1px solid rgba(255,255,255,0.22)',
+            }}
+          >
+            المنتج غير متوفر
+          </span>
+        )}
       </Link>
 
       {/* LEFT — Content */}
@@ -185,18 +202,18 @@ export default function ProductCard({ product }: { product: Product }) {
           <motion.button
             type="button"
             onClick={handleAdd}
-            disabled={!selectedSizeId || added}
-            whileHover={selectedSizeId && !added ? { scale: 1.04 } : {}}
-            whileTap={selectedSizeId && !added ? { scale: 0.93 } : {}}
+            disabled={!selectedSizeId || added || isOutOfStock}
+            whileHover={selectedSizeId && !added && !isOutOfStock ? { scale: 1.04 } : {}}
+            whileTap={selectedSizeId && !added && !isOutOfStock ? { scale: 0.93 } : {}}
             className="rounded-xl px-3 h-9 text-xs font-heading font-bold whitespace-nowrap transition-all duration-200"
             style={{
               background: added
                 ? '#16a34a'
-                : selectedSizeId
+                : selectedSizeId && !isOutOfStock
                   ? 'linear-gradient(135deg, #C8963C, #E8B45A)'
                   : 'rgba(200,150,60,0.08)',
-              color: added ? '#FFFFFF' : selectedSizeId ? '#0E0B09' : '#8A7B6C',
-              cursor: !selectedSizeId || added ? 'default' : 'pointer',
+              color: added ? '#FFFFFF' : selectedSizeId && !isOutOfStock ? '#0E0B09' : '#8A7B6C',
+              cursor: !selectedSizeId || added || isOutOfStock ? 'default' : 'pointer',
             }}
           >
             <AnimatePresence mode="wait" initial={false}>
@@ -210,6 +227,8 @@ export default function ProductCard({ product }: { product: Product }) {
               >
                 {added ? (
                   <><CheckCircle2 size={13} /> تمت</>
+                ) : isOutOfStock ? (
+                  'غير متوفر'
                 ) : selectedSizeId ? (
                   'أضيفي للسلة'
                 ) : (
