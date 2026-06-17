@@ -1,0 +1,19 @@
+import { createClient } from '@/lib/supabase/server'
+import InventoryClient from '@/components/admin/InventoryClient'
+import type { Product } from '@/lib/types'
+
+export default async function AdminInventoryPage() {
+  const supabase = await createClient()
+
+  const { data } = await supabase
+    .from('products')
+    .select(
+      `id, name, price, original_price, description, is_visible, category_id, sales_count, created_at, updated_at,
+       product_colors(id, product_id, name, hex_code, image_url, is_visible),
+       product_sizes(id, product_id, label, is_visible, sort_order),
+       product_variants(id, product_id, color_id, size_id, stock)`
+    )
+    .order('created_at', { ascending: false })
+
+  return <InventoryClient initialProducts={(data ?? []) as Product[]} />
+}

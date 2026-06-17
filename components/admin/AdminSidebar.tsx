@@ -11,6 +11,7 @@ const navItems = [
   { href: '/admin', label: 'الطلبات', icon: ShoppingBag, exact: true },
   { href: '/admin/reviews', label: 'التقييمات', icon: MessageSquare, exact: true },
   { href: '/admin/products', label: 'المنتجات', icon: Package, exact: false },
+  { href: '/admin/inventory', label: 'المخزون', icon: Package, exact: true },
   { href: '/admin/products/new', label: 'إضافة منتج', icon: PlusCircle, exact: true },
   { href: '/admin/stats',    label: 'الإحصاءات', icon: BarChart2, exact: true },
   { href: '/admin/settings', label: 'الإعدادات', icon: Settings,  exact: true },

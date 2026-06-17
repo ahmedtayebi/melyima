@@ -11,7 +11,8 @@ const PRODUCTS_SELECT = `
   id, name, price, original_price, description, is_visible, category_id, sales_count, created_at, updated_at,
   product_colors(id, product_id, name, hex_code, image_url, is_visible,
     product_color_images(id, color_id, image_url, sort_order)),
-  product_sizes(id, product_id, label, is_visible, sort_order)
+  product_sizes(id, product_id, label, is_visible, sort_order),
+  product_variants(id, product_id, color_id, size_id, stock)
 `
 
 const mapProduct = (p: any): Product => ({
@@ -37,6 +38,7 @@ const mapProduct = (p: any): Product => ({
     .filter((s: any, i: number, arr: any[]) =>
       arr.findIndex((t: any) => t.label === s.label) === i)
     .sort((a: any, b: any) => a.sort_order - b.sort_order),
+  product_variants: p.product_variants ?? [],
 })
 
 export default async function StorePage() {

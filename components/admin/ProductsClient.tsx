@@ -201,7 +201,10 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
         </div>
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((product) => (
+          {filtered.map((product) => {
+            const hasOutOfStockVariant = product.product_variants?.some(variant => variant.stock === 0) ?? false
+
+            return (
             <div
               key={product.id}
               className="bg-white rounded-xl border border-border overflow-hidden hover:shadow-md transition-shadow"
@@ -226,6 +229,18 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                 }`}>
                   {product.is_visible ? 'ظاهر' : 'مخفي'}
                 </span>
+                {hasOutOfStockVariant && (
+                  <span
+                    className="absolute top-2 left-2 text-[10px] font-heading font-bold px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: 'rgba(184,135,46,0.16)',
+                      color: '#8B6420',
+                      border: '1px solid rgba(184,135,46,0.35)',
+                    }}
+                  >
+                    نفد المخزون
+                  </span>
+                )}
               </div>
 
               {/* Info */}
@@ -271,7 +286,8 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

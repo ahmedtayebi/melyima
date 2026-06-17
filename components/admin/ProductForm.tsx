@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, GripVertical, Eye, EyeOff, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
-import type { Product } from '@/lib/types'
+import type { Product, ProductVariant } from '@/lib/types'
 
 // ── Local state types ──────────────────────────────────────────────────────────
 
@@ -47,6 +47,10 @@ const SIZE_PRESETS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
 
 function tempId() {
   return `new_${Math.random().toString(36).slice(2)}`
+}
+
+function stockKey(colorId: string, sizeId: string) {
+  return `${colorId}:${sizeId}`
 }
 
 function buildInitialColors(product?: Product): ColorEntry[] {
@@ -105,9 +109,36 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   const [customSize, setCustomSize] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [variantStocks, setVariantStocks] = useState<Record<string, string>>({})
+  const [variantStockTouched, setVariantStockTouched] = useState(false)
 
   // Drag state for size reorder
   const dragSizeIndex = useRef<number | null>(null)
+
+  useEffect(() => {
+    let ignore = false
+
+    async function loadVariants() {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('product_variants')
+        .select('id, product_id, color_id, size_id, stock')
+        .eq('product_id', productId)
+
+      if (ignore || error || !data) return
+
+      const next = Object.fromEntries(
+        (data as ProductVariant[]).map(variant => [
+          stockKey(variant.color_id, variant.size_id),
+          String(Math.max(0, variant.stock ?? 0)),
+        ])
+      )
+      setVariantStocks(next)
+    }
+
+    loadVariants()
+    return () => { ignore = true }
+  }, [productId])
 
   // ── Color helpers ────────────────────────────────────────────────────────────
 
@@ -202,6 +233,21 @@ export default function ProductForm({ productId, initialData, categories = [] }:
     setSizes(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s))
   }
 
+  const updateVariantStock = (colorId: string, sizeId: string, value: string) => {
+    setVariantStockTouched(true)
+    setVariantStocks(prev => {
+      const key = stockKey(colorId, sizeId)
+      if (value === '') {
+        const rest = { ...prev }
+        delete rest[key]
+        return rest
+      }
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed)) return prev
+      return { ...prev, [key]: String(Math.max(0, Math.floor(parsed))) }
+    })
+  }
+
   // ── Drag-to-reorder sizes ────────────────────────────────────────────────────
 
   const visibleSizes = sizes.filter(s => !s.toDelete)
@@ -255,10 +301,12 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       if (productError) throw new Error(productError.message)
 
       // 2. Process colors
+      const activeColorIds: { sourceId: string; actualId: string }[] = []
       for (const color of colors) {
         if (color.toDelete) {
           // Delete all color images first
           await supabase.from('product_color_images').delete().eq('color_id', color.id)
+          await supabase.from('product_variants').delete().eq('color_id', color.id)
           await supabase.from('product_colors').delete().eq('id', color.id)
           continue
         }
@@ -290,6 +338,8 @@ export default function ProductForm({ productId, initialData, categories = [] }:
             .eq('id', color.id)
           if (updateError) throw new Error(updateError.message)
         }
+
+        activeColorIds.push({ sourceId: color.id, actualId: actualColorId })
 
         // 3. Process images for this color
         const finalUrls: { url: string; sort_order: number }[] = []
@@ -339,25 +389,54 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       }
 
       // 5. Process sizes
+      const activeSizeIds: { sourceId: string; actualId: string }[] = []
       for (const size of sizes) {
         if (size.toDelete) {
+          await supabase.from('product_variants').delete().eq('size_id', size.id)
           await supabase.from('product_sizes').delete().eq('id', size.id)
           continue
         }
         if (size.isNew) {
-          await supabase.from('product_sizes').insert({
+          const { data: insertedSize, error: sizeInsertError } = await supabase.from('product_sizes').insert({
             product_id: productId,
             label: size.label,
             is_visible: size.is_visible,
             sort_order: size.sort_order,
-          })
+          }).select('id').single()
+          if (sizeInsertError) throw new Error(sizeInsertError.message)
+          activeSizeIds.push({ sourceId: size.id, actualId: insertedSize!.id })
         } else {
-          await supabase.from('product_sizes').update({
+          const { error: sizeUpdateError } = await supabase.from('product_sizes').update({
             label: size.label,
             is_visible: size.is_visible,
             sort_order: size.sort_order,
           }).eq('id', size.id)
+          if (sizeUpdateError) throw new Error(sizeUpdateError.message)
+          activeSizeIds.push({ sourceId: size.id, actualId: size.id })
         }
+      }
+
+      // 6. Process stock variants. Empty untouched grids keep backward-compatible unlimited stock.
+      const shouldSaveVariants = variantStockTouched || Object.keys(variantStocks).length > 0
+      if (shouldSaveVariants && activeColorIds.length > 0 && activeSizeIds.length > 0) {
+        const variantRows = activeColorIds.flatMap(color =>
+          activeSizeIds.map(size => {
+            const sourceValue = variantStocks[stockKey(color.sourceId, size.sourceId)]
+            const actualValue = variantStocks[stockKey(color.actualId, size.actualId)]
+            return {
+              product_id: productId,
+              color_id: color.actualId,
+              size_id: size.actualId,
+              stock: Math.max(0, Number(sourceValue ?? actualValue ?? 0)),
+            }
+          })
+        )
+
+        const { error: variantError } = await supabase
+          .from('product_variants')
+          .upsert(variantRows, { onConflict: 'color_id,size_id' })
+
+        if (variantError) throw new Error(variantError.message)
       }
 
       router.push('/admin/products')
@@ -604,6 +683,14 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         )}
       </section>
 
+      {/* Stock management */}
+      <StockGrid
+        colors={colors.filter(c => !c.toDelete)}
+        sizes={visibleSizes}
+        stocks={variantStocks}
+        onChange={updateVariantStock}
+      />
+
       {/* Save */}
       <div className="flex gap-3 pb-8">
         <Button onClick={handleSave} loading={saving} className="flex-1">
@@ -614,6 +701,93 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         </Button>
       </div>
     </div>
+  )
+}
+
+// ── StockGrid sub-component ───────────────────────────────────────────────────
+
+interface StockGridProps {
+  colors: ColorEntry[]
+  sizes: SizeEntry[]
+  stocks: Record<string, string>
+  onChange: (colorId: string, sizeId: string, value: string) => void
+}
+
+function StockGrid({ colors, sizes, stocks, onChange }: StockGridProps) {
+  return (
+    <section className="bg-white rounded-xl border border-border p-5 space-y-4">
+      <div className="space-y-1">
+        <h2 className="font-heading font-bold text-base text-brand">إدارة المخزون</h2>
+        <p className="text-xs text-muted font-body text-right leading-relaxed">
+          حددي الكمية لكل لون ومقاس. اتركي الخانة فارغة إذا كان المخزون غير محدود.
+        </p>
+      </div>
+
+      {colors.length === 0 || sizes.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-surface px-4 py-5 text-center">
+          <p className="text-sm text-muted font-body">
+            أضيفي لوناً ومقاساً واحداً على الأقل لإدارة المخزون.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto pb-1">
+          <div
+            className="min-w-max rounded-xl border border-border overflow-hidden"
+            style={{ backgroundColor: '#FDFAF5' }}
+          >
+            <div
+              className="grid border-b border-border"
+              style={{ gridTemplateColumns: `minmax(150px, 1fr) repeat(${sizes.length}, minmax(96px, 112px))` }}
+            >
+              <div className="px-3 py-3 text-xs font-heading font-bold text-muted text-right">
+                اللون
+              </div>
+              {sizes.map(size => (
+                <div
+                  key={size.id}
+                  className="px-2 py-3 text-center text-xs font-heading font-black text-brand border-r border-border"
+                >
+                  {size.label}
+                </div>
+              ))}
+            </div>
+
+            {colors.map(color => (
+              <div
+                key={color.id}
+                className="grid border-b border-border last:border-b-0"
+                style={{ gridTemplateColumns: `minmax(150px, 1fr) repeat(${sizes.length}, minmax(96px, 112px))` }}
+              >
+                <div className="flex items-center gap-2 px-3 py-3 bg-white">
+                  <span
+                    className="w-5 h-5 rounded-full border border-black/10 flex-shrink-0"
+                    style={{ backgroundColor: color.hex_code }}
+                  />
+                  <span className="font-heading font-bold text-sm text-brand truncate">
+                    {color.name || 'لون بدون اسم'}
+                  </span>
+                </div>
+
+                {sizes.map(size => (
+                  <div key={size.id} className="px-2 py-2 bg-white border-r border-border">
+                    <input
+                      type="number"
+                      min={0}
+                      inputMode="numeric"
+                      value={stocks[stockKey(color.id, size.id)] ?? ''}
+                      onChange={e => onChange(color.id, size.id, e.target.value)}
+                      aria-label={`مخزون ${color.name || 'اللون'} مقاس ${size.label}`}
+                      placeholder="غير محدود"
+                      className="w-full min-h-11 rounded-lg border border-border bg-surface px-2 text-center text-sm font-heading font-bold text-brand placeholder:text-[10px] placeholder:font-body placeholder:text-muted/70 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10"
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
