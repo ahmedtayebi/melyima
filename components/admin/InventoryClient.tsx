@@ -3,28 +3,23 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { AlertTriangle, CheckCircle2, Filter, Pencil, RotateCcw, Save, Search } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, Pencil, Search } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { Product, ProductVariant } from '@/lib/types'
+import type { Product, ProductColor, ProductSize, ProductVariant } from '@/lib/types'
 
 type StockFilter = 'all' | 'out' | 'low' | 'unmanaged'
+type CellStatus = 'idle' | 'saving' | 'saved' | 'error'
 
-type InventoryRow = {
+type InventoryCombination = {
   key: string
   productId: string
   productName: string
-  productVisible: boolean
   colorId: string
   colorName: string
-  colorHex: string
-  colorVisible: boolean
   sizeId: string
   sizeLabel: string
-  sizeVisible: boolean
-  imageUrl: string | null
   stock: number | null
-  variantId: string | null
 }
 
 interface Props {
@@ -40,40 +35,22 @@ const filterTabs: { key: StockFilter; label: string }[] = [
   { key: 'unmanaged', label: 'غير مُدار' },
 ]
 
-function rowKey(productId: string, colorId: string, sizeId: string) {
+function stockKey(productId: string, colorId: string, sizeId: string) {
   return `${productId}:${colorId}:${sizeId}`
 }
 
-function flattenInventory(products: Product[]): InventoryRow[] {
-  return products.flatMap(product => {
-    const colors = [...(product.product_colors ?? [])]
-    const sizes = [...(product.product_sizes ?? [])].sort((a, b) => a.sort_order - b.sort_order)
-    const variants = product.product_variants ?? []
+function sortSizes(sizes: ProductSize[]) {
+  return [...sizes].sort((a, b) => a.sort_order - b.sort_order)
+}
 
-    if (colors.length === 0 || sizes.length === 0) return []
+function getVariant(product: Product, colorId: string, sizeId: string) {
+  return product.product_variants?.find(variant =>
+    variant.color_id === colorId && variant.size_id === sizeId
+  )
+}
 
-    return colors.flatMap(color =>
-      sizes.map(size => {
-        const variant = variants.find(v => v.color_id === color.id && v.size_id === size.id)
-        return {
-          key: rowKey(product.id, color.id, size.id),
-          productId: product.id,
-          productName: product.name,
-          productVisible: product.is_visible,
-          colorId: color.id,
-          colorName: color.name,
-          colorHex: color.hex_code,
-          colorVisible: color.is_visible,
-          sizeId: size.id,
-          sizeLabel: size.label,
-          sizeVisible: size.is_visible,
-          imageUrl: color.image_url,
-          stock: variant?.stock ?? null,
-          variantId: variant?.id ?? null,
-        }
-      })
-    )
-  })
+function getStock(product: Product, colorId: string, sizeId: string) {
+  return getVariant(product, colorId, sizeId)?.stock ?? null
 }
 
 function normalizeStockValue(value: string) {
@@ -84,53 +61,74 @@ function normalizeStockValue(value: string) {
   return Math.max(0, Math.floor(parsed))
 }
 
+function flattenInventory(products: Product[]): InventoryCombination[] {
+  return products.flatMap(product => {
+    const colors = product.product_colors ?? []
+    const sizes = sortSizes(product.product_sizes ?? [])
+    if (colors.length === 0 || sizes.length === 0) return []
+
+    return colors.flatMap(color =>
+      sizes.map(size => ({
+        key: stockKey(product.id, color.id, size.id),
+        productId: product.id,
+        productName: product.name,
+        colorId: color.id,
+        colorName: color.name,
+        sizeId: size.id,
+        sizeLabel: size.label,
+        stock: getStock(product, color.id, size.id),
+      }))
+    )
+  })
+}
+
+function combinationMatchesFilter(combination: InventoryCombination, filter: StockFilter) {
+  return (
+    filter === 'all' ||
+    (filter === 'out' && combination.stock === 0) ||
+    (filter === 'low' && combination.stock !== null && combination.stock > 0 && combination.stock <= LOW_STOCK_LIMIT) ||
+    (filter === 'unmanaged' && combination.stock === null)
+  )
+}
+
+function productMatchesSearch(product: Product, search: string) {
+  const q = search.trim().toLowerCase()
+  if (!q) return true
+
+  return [
+    product.name,
+    ...(product.product_colors ?? []).map(color => color.name),
+    ...(product.product_sizes ?? []).map(size => size.label),
+  ].some(value => value.toLowerCase().includes(q))
+}
+
+function productMatchesFilter(product: Product, filter: StockFilter) {
+  if (filter === 'all') return true
+  return flattenInventory([product]).some(combination => combinationMatchesFilter(combination, filter))
+}
+
 export default function InventoryClient({ initialProducts }: Props) {
   const [products, setProducts] = useState<Product[]>(initialProducts)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [cellStatus, setCellStatus] = useState<Record<string, CellStatus>>({})
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<StockFilter>('all')
-  const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
-  const rows = useMemo(() => flattenInventory(products), [products])
+  const combinations = useMemo(() => flattenInventory(products), [products])
 
   const stats = useMemo(() => ({
-    total: rows.length,
-    out: rows.filter(row => row.stock === 0).length,
-    low: rows.filter(row => row.stock !== null && row.stock > 0 && row.stock <= LOW_STOCK_LIMIT).length,
-    unmanaged: rows.filter(row => row.stock === null).length,
-  }), [rows])
+    total: combinations.length,
+    out: combinations.filter(item => item.stock === 0).length,
+    low: combinations.filter(item => item.stock !== null && item.stock > 0 && item.stock <= LOW_STOCK_LIMIT).length,
+    unmanaged: combinations.filter(item => item.stock === null).length,
+  }), [combinations])
 
-  const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return rows.filter(row => {
-      const matchesFilter =
-        filter === 'all' ||
-        (filter === 'out' && row.stock === 0) ||
-        (filter === 'low' && row.stock !== null && row.stock > 0 && row.stock <= LOW_STOCK_LIMIT) ||
-        (filter === 'unmanaged' && row.stock === null)
-
-      if (!matchesFilter) return false
-      if (!q) return true
-
-      return [
-        row.productName,
-        row.colorName,
-        row.sizeLabel,
-      ].some(value => value.toLowerCase().includes(q))
-    })
-  }, [filter, rows, search])
-
-  const changedRows = useMemo(() => rows.filter(row => {
-    if (!(row.key in drafts)) return false
-    const parsed = normalizeStockValue(drafts[row.key])
-    return parsed !== undefined && parsed !== row.stock
-  }), [drafts, rows])
-
-  const invalidChanges = useMemo(() => rows.filter(row => {
-    if (!(row.key in drafts)) return false
-    return normalizeStockValue(drafts[row.key]) === undefined
-  }), [drafts, rows])
+  const visibleProducts = useMemo(() => {
+    return products.filter(product =>
+      productMatchesSearch(product, search) && productMatchesFilter(product, filter)
+    )
+  }, [filter, products, search])
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
@@ -142,119 +140,97 @@ export default function InventoryClient({ initialProducts }: Props) {
     setDrafts(prev => ({ ...prev, [key]: value }))
   }
 
-  const resetDrafts = () => setDrafts({})
+  const setStatus = (key: string, status: CellStatus) => {
+    setCellStatus(prev => ({ ...prev, [key]: status }))
+  }
 
-  const saveChanges = async () => {
-    if (invalidChanges.length > 0) {
-      showToast('توجد قيم غير صحيحة في المخزون', 'error')
+  const updateProductVariant = (savedVariant: ProductVariant | null, productId: string, colorId: string, sizeId: string) => {
+    setProducts(prev => prev.map(product => {
+      if (product.id !== productId) return product
+
+      const retained = (product.product_variants ?? []).filter(variant =>
+        !(variant.color_id === colorId && variant.size_id === sizeId)
+      )
+
+      return {
+        ...product,
+        product_variants: savedVariant ? [...retained, savedVariant] : retained,
+      }
+    }))
+  }
+
+  const saveCell = async (productId: string, colorId: string, sizeId: string) => {
+    const key = stockKey(productId, colorId, sizeId)
+    const product = products.find(item => item.id === productId)
+    if (!product) return
+
+    const currentStock = getStock(product, colorId, sizeId)
+    const value = drafts[key] ?? (currentStock === null ? '' : String(currentStock))
+    const parsed = normalizeStockValue(value)
+
+    if (parsed === undefined) {
+      showToast('قيمة المخزون غير صحيحة', 'error')
+      setStatus(key, 'error')
       return
     }
-    if (changedRows.length === 0) return
 
-    setSaving(true)
+    if (parsed === currentStock) {
+      setDrafts(prev => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      return
+    }
+
+    setStatus(key, 'saving')
     try {
       const supabase = createClient()
-      const toDelete = changedRows.filter(row => normalizeStockValue(drafts[row.key]) === null)
-      const toUpsert = changedRows
-        .map(row => {
-          const stock = normalizeStockValue(drafts[row.key])
-          if (stock === null || stock === undefined) return null
-          return {
-            product_id: row.productId,
-            color_id: row.colorId,
-            size_id: row.sizeId,
-            stock,
-          }
-        })
-        .filter(Boolean) as Omit<ProductVariant, 'id'>[]
 
-      for (const row of toDelete) {
+      if (parsed === null) {
         const { error } = await supabase
           .from('product_variants')
           .delete()
-          .eq('product_id', row.productId)
-          .eq('color_id', row.colorId)
-          .eq('size_id', row.sizeId)
-        if (error) throw new Error(error.message)
-      }
+          .eq('product_id', productId)
+          .eq('color_id', colorId)
+          .eq('size_id', sizeId)
 
-      let savedVariants: ProductVariant[] = []
-      if (toUpsert.length > 0) {
+        if (error) throw new Error(error.message)
+        updateProductVariant(null, productId, colorId, sizeId)
+      } else {
         const { data, error } = await supabase
           .from('product_variants')
-          .upsert(toUpsert, { onConflict: 'color_id,size_id' })
+          .upsert(
+            { product_id: productId, color_id: colorId, size_id: sizeId, stock: parsed },
+            { onConflict: 'color_id,size_id' }
+          )
           .select('id, product_id, color_id, size_id, stock')
+          .single()
 
         if (error) throw new Error(error.message)
-        savedVariants = (data ?? []) as ProductVariant[]
+        updateProductVariant(data as ProductVariant, productId, colorId, sizeId)
       }
-
-      const deletedKeys = new Set(toDelete.map(row => row.key))
-      const savedByKey = new Map(
-        savedVariants.map(variant => [
-          rowKey(variant.product_id, variant.color_id, variant.size_id),
-          variant,
-        ])
-      )
-
-      setProducts(prev => prev.map(product => {
-        const productRowsChanged = changedRows.some(row => row.productId === product.id)
-        if (!productRowsChanged) return product
-
-        const existing = product.product_variants ?? []
-        const retained = existing.filter(variant =>
-          !deletedKeys.has(rowKey(product.id, variant.color_id, variant.size_id)) &&
-          !savedByKey.has(rowKey(product.id, variant.color_id, variant.size_id))
-        )
-
-        return {
-          ...product,
-          product_variants: [...retained, ...savedVariants.filter(v => v.product_id === product.id)],
-        }
-      }))
 
       setDrafts(prev => {
         const next = { ...prev }
-        changedRows.forEach(row => { delete next[row.key] })
+        delete next[key]
         return next
       })
-      showToast('تم حفظ المخزون بنجاح', 'success')
+      setStatus(key, 'saved')
+      setTimeout(() => setStatus(key, 'idle'), 1400)
     } catch (err) {
+      setStatus(key, 'error')
       showToast(err instanceof Error ? err.message : 'تعذر حفظ المخزون', 'error')
-    } finally {
-      setSaving(false)
     }
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="font-heading font-black text-2xl text-brand">المخزون</h1>
-          <span className="bg-brand text-white text-xs font-bold font-heading px-2.5 py-1 rounded-full">
-            {rows.length}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={resetDrafts}
-            disabled={Object.keys(drafts).length === 0 || saving}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-white text-muted text-sm font-heading font-bold hover:text-brand hover:border-brand transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <RotateCcw size={15} />
-            تراجع
-          </button>
-          <button
-            type="button"
-            onClick={saveChanges}
-            disabled={changedRows.length === 0 || saving}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-heading font-bold hover:opacity-90 transition-all disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <Save size={15} />
-            {saving ? 'جارٍ الحفظ...' : `حفظ (${changedRows.length})`}
-          </button>
-        </div>
+      <div className="flex items-center gap-3">
+        <h1 className="font-heading font-black text-2xl text-brand">المخزون</h1>
+        <span className="bg-brand text-white text-xs font-bold font-heading px-2.5 py-1 rounded-full">
+          {combinations.length}
+        </span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -310,54 +286,19 @@ export default function InventoryClient({ initialProducts }: Props) {
         </div>
       </div>
 
-      {invalidChanges.length > 0 && (
-        <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 font-body">
-          <AlertTriangle size={16} />
-          توجد {invalidChanges.length} قيمة غير صحيحة. استعملي أرقامًا صحيحة فقط أو اتركي الخانة فارغة.
-        </div>
-      )}
-
-      <div className="hidden lg:block bg-white rounded-xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border bg-surface">
-            <tr>
-              {['المنتج', 'اللون', 'المقاس', 'الحالة', 'المخزون', 'تعديل'].map(h => (
-                <th key={h} className="text-right px-4 py-3 font-heading font-bold text-xs text-muted">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {visibleRows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-center py-12 text-muted font-body text-sm">
-                  لا توجد نتائج
-                </td>
-              </tr>
-            ) : visibleRows.map(row => (
-              <InventoryTableRow
-                key={row.key}
-                row={row}
-                value={drafts[row.key] ?? (row.stock === null ? '' : String(row.stock))}
-                changed={changedRows.some(changed => changed.key === row.key)}
-                onChange={value => updateDraft(row.key, value)}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="lg:hidden space-y-3">
-        {visibleRows.length === 0 ? (
-          <p className="text-center py-12 text-muted font-body text-sm">لا توجد نتائج</p>
-        ) : visibleRows.map(row => (
-          <InventoryMobileCard
-            key={row.key}
-            row={row}
-            value={drafts[row.key] ?? (row.stock === null ? '' : String(row.stock))}
-            changed={changedRows.some(changed => changed.key === row.key)}
-            onChange={value => updateDraft(row.key, value)}
+      <div className="space-y-4">
+        {visibleProducts.length === 0 ? (
+          <div className="bg-white rounded-xl border border-border py-16 text-center">
+            <p className="text-muted font-body text-sm">لا توجد منتجات مطابقة</p>
+          </div>
+        ) : visibleProducts.map(product => (
+          <ProductInventoryCard
+            key={product.id}
+            product={product}
+            drafts={drafts}
+            cellStatus={cellStatus}
+            onDraftChange={updateDraft}
+            onSaveCell={saveCell}
           />
         ))}
       </div>
@@ -374,190 +315,282 @@ export default function InventoryClient({ initialProducts }: Props) {
   )
 }
 
-function StockBadge({ row }: { row: InventoryRow }) {
-  if (row.stock === null) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-heading font-bold text-gray-600">
-        <Filter size={11} />
-        غير مُدار
-      </span>
-    )
-  }
-  if (row.stock === 0) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-[11px] font-heading font-bold text-red-700">
-        <AlertTriangle size={11} />
-        نفد
-      </span>
-    )
-  }
-  if (row.stock <= LOW_STOCK_LIMIT) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-heading font-bold text-amber-800">
-        <AlertTriangle size={11} />
-        منخفض
-      </span>
-    )
-  }
+function ProductInventoryCard({
+  product,
+  drafts,
+  cellStatus,
+  onDraftChange,
+  onSaveCell,
+}: {
+  product: Product
+  drafts: Record<string, string>
+  cellStatus: Record<string, CellStatus>
+  onDraftChange: (key: string, value: string) => void
+  onSaveCell: (productId: string, colorId: string, sizeId: string) => void
+}) {
+  const colors = product.product_colors ?? []
+  const sizes = sortSizes(product.product_sizes ?? [])
+  const firstImage = colors.find(color => color.image_url)?.image_url ?? null
+
+  const outCount = colors.reduce((sum, color) =>
+    sum + sizes.filter(size => getStock(product, color.id, size.id) === 0).length, 0)
+
+  const unmanagedCount = colors.reduce((sum, color) =>
+    sum + sizes.filter(size => getStock(product, color.id, size.id) === null).length, 0)
+
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[11px] font-heading font-bold text-green-700">
-      <CheckCircle2 size={11} />
-      متوفر
-    </span>
+    <section className="bg-white rounded-xl border border-border overflow-hidden">
+      <div className="flex flex-col lg:flex-row-reverse">
+        <aside className="lg:w-64 border-b lg:border-b-0 lg:border-l border-border bg-[#FFFCF6] p-4">
+          <div className="flex lg:flex-col gap-3">
+            <div className="relative w-20 h-20 lg:w-full lg:aspect-[4/3] lg:h-auto rounded-xl overflow-hidden bg-surface border border-border flex-shrink-0">
+              {firstImage ? (
+                <Image
+                  src={firstImage}
+                  alt={product.name}
+                  fill
+                  sizes="(max-width: 1024px) 80px, 256px"
+                  className="object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <span className="font-heading font-black text-3xl text-border">M</span>
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="font-heading font-black text-base text-brand text-right leading-snug line-clamp-2">
+                    {product.name}
+                  </h2>
+                  <p className="mt-1 text-xs text-muted font-body text-right">
+                    {colors.length} لون · {sizes.length} مقاس
+                  </p>
+                </div>
+                <Link
+                  href={`/admin/products/${product.id}/edit`}
+                  className="inline-flex lg:hidden items-center justify-center w-9 h-9 rounded-lg border border-border text-muted hover:text-brand hover:border-brand"
+                  aria-label="تعديل المنتج"
+                >
+                  <Pencil size={15} />
+                </Link>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {!product.is_visible && (
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-heading font-bold text-gray-500">
+                    المنتج مخفي
+                  </span>
+                )}
+                {outCount > 0 && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-heading font-bold text-amber-800">
+                    {outCount} نفد
+                  </span>
+                )}
+                {unmanagedCount > 0 && (
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-heading font-bold text-gray-600">
+                    {unmanagedCount} غير مُدار
+                  </span>
+                )}
+              </div>
+
+              <Link
+                href={`/admin/products/${product.id}/edit`}
+                className="hidden lg:inline-flex mt-4 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-heading font-bold text-muted hover:text-brand hover:border-brand transition-colors"
+              >
+                <Pencil size={12} />
+                تعديل المنتج
+              </Link>
+            </div>
+          </div>
+        </aside>
+
+        <div className="flex-1 p-4 min-w-0">
+          {colors.length === 0 || sizes.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-surface px-4 py-8 text-center">
+              <p className="text-sm text-muted font-body">
+                أضيفي ألواناً ومقاسات لهذا المنتج لإدارة مخزونه.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto pb-1">
+              <div
+                className="min-w-max rounded-xl border border-border overflow-hidden"
+                style={{ backgroundColor: '#FDFAF5' }}
+              >
+                <div
+                  className="grid border-b border-border"
+                  style={{ gridTemplateColumns: `minmax(136px, 1.2fr) repeat(${sizes.length}, minmax(86px, 104px))` }}
+                >
+                  <div className="px-3 py-3 text-xs font-heading font-bold text-muted text-right">
+                    اللون
+                  </div>
+                  {sizes.map(size => (
+                    <div
+                      key={size.id}
+                      className="px-2 py-3 text-center text-xs font-heading font-black text-brand border-r border-border"
+                    >
+                      {size.label}
+                    </div>
+                  ))}
+                </div>
+
+                {colors.map(color => (
+                  <ColorStockRow
+                    key={color.id}
+                    product={product}
+                    color={color}
+                    sizes={sizes}
+                    drafts={drafts}
+                    cellStatus={cellStatus}
+                    onDraftChange={onDraftChange}
+                    onSaveCell={onSaveCell}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
-function InventoryImage({ row }: { row: InventoryRow }) {
+function ColorStockRow({
+  product,
+  color,
+  sizes,
+  drafts,
+  cellStatus,
+  onDraftChange,
+  onSaveCell,
+}: {
+  product: Product
+  color: ProductColor
+  sizes: ProductSize[]
+  drafts: Record<string, string>
+  cellStatus: Record<string, CellStatus>
+  onDraftChange: (key: string, value: string) => void
+  onSaveCell: (productId: string, colorId: string, sizeId: string) => void
+}) {
   return (
-    <div className="w-11 h-11 rounded-xl overflow-hidden bg-surface border border-border flex-shrink-0">
-      {row.imageUrl ? (
-        <Image
-          src={row.imageUrl}
-          alt={row.productName}
-          width={44}
-          height={44}
-          className="w-full h-full object-cover"
+    <div
+      className="grid border-b border-border last:border-b-0"
+      style={{ gridTemplateColumns: `minmax(136px, 1.2fr) repeat(${sizes.length}, minmax(86px, 104px))` }}
+    >
+      <div className="px-3 py-3 flex items-center gap-2 min-w-0">
+        <span
+          className="w-5 h-5 rounded-full border border-black/10 flex-shrink-0"
+          style={{ backgroundColor: color.hex_code }}
         />
-      ) : (
-        <div className="w-full h-full" style={{ backgroundColor: row.colorHex }} />
-      )}
-    </div>
-  )
-}
+        <div className="min-w-0">
+          <p className="font-heading font-bold text-xs text-brand truncate">{color.name}</p>
+          {!color.is_visible && (
+            <p className="text-[10px] text-muted font-body">مخفي</p>
+          )}
+        </div>
+      </div>
 
-function VisibilityLabels({ row }: { row: InventoryRow }) {
-  const hidden: string[] = []
-  if (!row.productVisible) hidden.push('المنتج مخفي')
-  if (!row.colorVisible) hidden.push('اللون مخفي')
-  if (!row.sizeVisible) hidden.push('المقاس مخفي')
-
-  if (hidden.length === 0) return null
-
-  return (
-    <div className="flex flex-wrap gap-1 mt-1">
-      {hidden.map(label => (
-        <span key={label} className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-heading font-bold text-gray-500">
-          {label}
-        </span>
+      {sizes.map(size => (
+        <StockCell
+          key={size.id}
+          product={product}
+          color={color}
+          size={size}
+          value={drafts[stockKey(product.id, color.id, size.id)]}
+          status={cellStatus[stockKey(product.id, color.id, size.id)] ?? 'idle'}
+          onDraftChange={onDraftChange}
+          onSaveCell={onSaveCell}
+        />
       ))}
     </div>
   )
 }
 
-function StockInput({
+function StockCell({
+  product,
+  color,
+  size,
   value,
-  changed,
-  onChange,
+  status,
+  onDraftChange,
+  onSaveCell,
 }: {
-  value: string
-  changed: boolean
-  onChange: (value: string) => void
+  product: Product
+  color: ProductColor
+  size: ProductSize
+  value: string | undefined
+  status: CellStatus
+  onDraftChange: (key: string, value: string) => void
+  onSaveCell: (productId: string, colorId: string, sizeId: string) => void
 }) {
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      placeholder="غير محدود"
-      className={cn(
-        'w-28 rounded-xl border px-3 py-2 text-sm text-brand text-center font-body focus:outline-none focus:ring-2 focus:ring-brand/10',
-        changed ? 'border-accent bg-accent/5' : 'border-border bg-white focus:border-brand'
-      )}
-      dir="ltr"
-    />
-  )
-}
+  const key = stockKey(product.id, color.id, size.id)
+  const stock = getStock(product, color.id, size.id)
+  const displayValue = value ?? (stock === null ? '' : String(stock))
+  const changed = normalizeStockValue(displayValue) !== stock
+  const isOut = normalizeStockValue(displayValue) === 0
 
-function InventoryTableRow({
-  row,
-  value,
-  changed,
-  onChange,
-}: {
-  row: InventoryRow
-  value: string
-  changed: boolean
-  onChange: (value: string) => void
-}) {
-  return (
-    <tr className={cn('transition-colors hover:bg-surface/50', changed && 'bg-accent/5')}>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-3">
-          <InventoryImage row={row} />
-          <div className="min-w-0">
-            <p className="font-heading font-bold text-sm text-brand truncate">{row.productName}</p>
-            <VisibilityLabels row={row} />
-          </div>
-        </div>
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="w-4 h-4 rounded-full border border-black/10" style={{ backgroundColor: row.colorHex }} />
-          <span className="font-body text-sm text-brand">{row.colorName}</span>
-        </div>
-      </td>
-      <td className="px-4 py-3">
-        <span className="inline-flex rounded-full border border-border px-3 py-1 text-xs font-heading font-bold text-brand">
-          {row.sizeLabel}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        <StockBadge row={row} />
-      </td>
-      <td className="px-4 py-3">
-        <StockInput value={value} changed={changed} onChange={onChange} />
-      </td>
-      <td className="px-4 py-3">
-        <Link
-          href={`/admin/products/${row.productId}/edit`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-heading font-bold text-muted hover:text-brand hover:border-brand transition-colors"
-        >
-          <Pencil size={12} />
-          المنتج
-        </Link>
-      </td>
-    </tr>
-  )
-}
+  const save = () => onSaveCell(product.id, color.id, size.id)
 
-function InventoryMobileCard({
-  row,
-  value,
-  changed,
-  onChange,
-}: {
-  row: InventoryRow
-  value: string
-  changed: boolean
-  onChange: (value: string) => void
-}) {
   return (
-    <div className={cn('bg-white rounded-xl border p-4 space-y-3', changed ? 'border-accent' : 'border-border')}>
-      <div className="flex items-start gap-3">
-        <InventoryImage row={row} />
-        <div className="min-w-0 flex-1">
-          <p className="font-heading font-bold text-sm text-brand truncate">{row.productName}</p>
-          <div className="flex items-center gap-2 mt-1 text-xs text-muted font-body">
-            <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: row.colorHex }} />
-            <span>{row.colorName}</span>
-            <span>·</span>
-            <span>{row.sizeLabel}</span>
-          </div>
-          <VisibilityLabels row={row} />
-        </div>
-        <StockBadge row={row} />
-      </div>
-      <div className="flex items-center justify-between gap-3 pt-2 border-t border-border">
-        <StockInput value={value} changed={changed} onChange={onChange} />
-        <Link
-          href={`/admin/products/${row.productId}/edit`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-heading font-bold text-muted hover:text-brand"
-        >
-          <Pencil size={12} />
-          المنتج
-        </Link>
-      </div>
+    <div className={cn(
+      'relative border-r border-border p-2 transition-colors',
+      isOut ? 'bg-amber-100/70' : 'bg-white',
+      changed && 'bg-accent/10',
+      status === 'error' && 'bg-red-50'
+    )}>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={displayValue}
+        onChange={event => onDraftChange(key, event.target.value)}
+        onBlur={save}
+        onKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.currentTarget.blur()
+          }
+        }}
+        placeholder="غير محدود"
+        className={cn(
+          'h-9 w-full rounded-lg border px-2 text-center text-sm font-body text-brand outline-none transition-colors placeholder:text-gray-400',
+          isOut ? 'border-amber-300 bg-amber-50' : 'border-border bg-white',
+          changed && 'border-accent',
+          status === 'error' && 'border-red-300 bg-red-50'
+        )}
+        dir="ltr"
+        aria-label={`${product.name} ${color.name} ${size.label}`}
+      />
+      <CellStatusIndicator status={status} />
     </div>
   )
+}
+
+function CellStatusIndicator({ status }: { status: CellStatus }) {
+  if (status === 'saving') {
+    return (
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">
+        <Loader2 size={12} className="animate-spin" />
+      </span>
+    )
+  }
+
+  if (status === 'saved') {
+    return (
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-600">
+        <CheckCircle2 size={12} />
+      </span>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-red-600">
+        <AlertTriangle size={12} />
+      </span>
+    )
+  }
+
+  return null
 }
