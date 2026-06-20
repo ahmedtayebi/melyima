@@ -113,6 +113,13 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    if (delivery_type === 'office' && !String(commune ?? '').trim()) {
+      return NextResponse.json(
+        { success: false, error: 'يرجى اختيار مكتب الاستلام' },
+        { status: 400 }
+      )
+    }
+
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) {
       console.error('SUPABASE_SERVICE_ROLE_KEY is required for atomic order creation')

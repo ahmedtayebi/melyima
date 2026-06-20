@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { ecotrackCreateOrder, WILAYA_CODES, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
+import { ecotrackCreateOrder, ecotrackGetStopDeskCommune, WILAYA_CODES, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { requireAdmin } from '../_auth'
 
 export async function POST(req: NextRequest) {
@@ -35,16 +35,30 @@ export async function POST(req: NextRequest) {
       .map((i: { product_name: string; quantity: number }) => `${i.product_name} x${i.quantity}`)
       .join(', ')
       .substring(0, 255)
+    const fallbackCommune = order.commune ?? order.wilaya_name ?? order.wilaya
+    const stopDesk = order.delivery_type === 'office' ? 1 : 0
+    let ecotrackCommune = fallbackCommune
+
+    if (stopDesk === 1 && !order.commune) {
+      const stopDeskCommune = await ecotrackGetStopDeskCommune(code_wilaya)
+      if (!stopDeskCommune.success || !stopDeskCommune.commune) {
+        return NextResponse.json(
+          { success: false, error: 'لا توجد بلدية مكتب متاحة لهذه الولاية في Ecotrack' },
+          { status: 400 }
+        )
+      }
+      ecotrackCommune = stopDeskCommune.commune
+    }
 
     const result = await ecotrackCreateOrder({
       nom_client: order.customer_name,
       telephone: order.phone,
       telephone_2: order.phone2 ?? undefined,
-      adresse: order.address ?? order.commune ?? order.wilaya,
-      commune: order.commune ?? '',
+      adresse: order.address ?? fallbackCommune,
+      commune: ecotrackCommune,
       code_wilaya,
       montant: order.total_price,
-      stop_desk: order.delivery_type === 'office' ? 1 : 0,
+      stop_desk: stopDesk,
       produit,
       remarque: order.notes ?? undefined,
       reference: order.id.slice(-8).toUpperCase(),

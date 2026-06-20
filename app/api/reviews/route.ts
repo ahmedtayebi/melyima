@@ -2,6 +2,23 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { rateLimitPublicApi } from '@/lib/rate-limit'
 
+const REVIEW_IMAGES_BUCKET_PATH = '/storage/v1/object/public/review-images/'
+
+function isOwnReviewImageUrl(value: string) {
+  try {
+    const url = new URL(value)
+    const supabaseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!)
+
+    return (
+      url.protocol === 'https:' &&
+      url.origin === supabaseUrl.origin &&
+      url.pathname.startsWith(REVIEW_IMAGES_BUCKET_PATH)
+    )
+  } catch {
+    return false
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const rateLimited = await rateLimitPublicApi(req, 'reviews')
@@ -26,6 +43,13 @@ export async function POST(req: NextRequest) {
     const safeImages: string[] = Array.isArray(images)
       ? images.filter((u: unknown) => typeof u === 'string').slice(0, 3)
       : []
+
+    if (safeImages.length > 0 && safeImages.some(url => !isOwnReviewImageUrl(url))) {
+      return NextResponse.json(
+        { success: false, error: 'رابط الصورة غير مسموح به' },
+        { status: 400 }
+      )
+    }
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

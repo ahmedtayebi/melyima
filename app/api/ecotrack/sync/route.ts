@@ -36,7 +36,14 @@ async function fetchAllPages(url: string, label: string): Promise<EcotrackOrder[
   let hasMore = true
 
   while (hasMore) {
-    const res = await fetch(`${url}&page=${page}`, { headers: { Accept: 'application/json' } })
+    const pageUrl = new URL(url)
+    pageUrl.searchParams.set('page', String(page))
+    const res = await fetch(pageUrl, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${TOKEN}`,
+      },
+    })
     const body = await res.json()
     const rows: EcotrackOrder[] = body.data ?? body.orders ?? []
 
@@ -60,7 +67,7 @@ export async function POST() {
 
     // ── Fetch all orders from Ecotrack ────────────────────────
     const allOrders = await fetchAllPages(
-      `${BASE_URL}/api/v1/get/orders?api_token=${TOKEN}&per_page=${PER_PAGE}`,
+      `${BASE_URL}/api/v1/get/orders?per_page=${PER_PAGE}`,
       'ecotrack'
     )
 

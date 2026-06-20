@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useCartStore } from '@/lib/cart-store'
@@ -13,6 +13,12 @@ import { cn } from '@/lib/utils'
 
 interface OrderFormProps {
   onSuccess: () => void
+}
+
+type OfficeCommune = {
+  name: string
+  code_postal: string | null
+  has_stop_desk: boolean
 }
 
 export default function OrderForm({ onSuccess }: OrderFormProps) {
@@ -34,6 +40,10 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [orderId, setOrderId] = useState<string | null>(null)
   const [summaryOpen, setSummaryOpen] = useState(false)
+  const [officeCommunes, setOfficeCommunes] = useState<OfficeCommune[]>([])
+  const [loadingOffices, setLoadingOffices] = useState(false)
+  const [officeError, setOfficeError] = useState<string | null>(null)
+  const [officesLoadedForWilaya, setOfficesLoadedForWilaya] = useState<string | null>(null)
 
   const selectedWilaya = useMemo(
     () => DELIVERY_PRICES.find(w => w.code === formData.wilaya),
@@ -46,6 +56,44 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
 
   const productsTotal = items.reduce((sum, item) => sum + (item.price ?? 0) * item.quantity, 0)
   const totalPrice = productsTotal + deliveryPrice
+
+  useEffect(() => {
+    if (!formData.wilaya || formData.delivery_type !== 'office') {
+      setOfficeCommunes([])
+      setOfficeError(null)
+      setLoadingOffices(false)
+      setOfficesLoadedForWilaya(null)
+      return
+    }
+
+    const controller = new AbortController()
+    setLoadingOffices(true)
+    setOfficeError(null)
+    setOfficeCommunes([])
+    setOfficesLoadedForWilaya(null)
+
+    fetch(`/api/ecotrack/communes?wilaya_id=${Number(formData.wilaya)}&stop_desk=1`, {
+      signal: controller.signal,
+    })
+      .then(async res => {
+        const data = await res.json()
+        if (!res.ok || !data.success) throw new Error(data.error || 'تعذّر جلب مكاتب الاستلام')
+        setOfficeCommunes(Array.isArray(data.communes) ? data.communes : [])
+        setOfficesLoadedForWilaya(formData.wilaya)
+      })
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setOfficeError(err instanceof Error ? err.message : 'تعذّر جلب مكاتب الاستلام')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingOffices(false)
+      })
+
+    return () => controller.abort()
+  }, [formData.delivery_type, formData.wilaya])
+
+  const officesLoaded = officesLoadedForWilaya === formData.wilaya
+  const officesPending = formData.delivery_type === 'office' && !!formData.wilaya && !officesLoaded && !officeError
 
   const validate = () => {
     const next: Record<string, string> = {}
@@ -60,6 +108,9 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
     if (!formData.wilaya) next.wilaya = 'يرجى اختيار الولاية'
     if (formData.delivery_type === 'home' && formData.wilaya && !formData.commune) {
       next.commune = 'يرجى اختيار البلدية'
+    }
+    if (formData.delivery_type === 'office' && formData.wilaya && !formData.commune) {
+      next.commune = 'يرجى اختيار مكتب الاستلام'
     }
     if (formData.delivery_type === 'home' && !formData.address.trim()) {
       next.address = 'العنوان مطلوب للتوصيل للمنزل'
@@ -228,7 +279,12 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => setFormData(d => ({ ...d, delivery_type: opt.value as 'home' | 'office' }))}
+                onClick={() => setFormData(d => ({
+                  ...d,
+                  delivery_type: opt.value as 'home' | 'office',
+                  commune: '',
+                  address: opt.value === 'office' ? '' : d.address,
+                }))}
                 style={{
                   backgroundColor: formData.delivery_type === opt.value ? '#1a1a1a' : '#ffffff',
                   color: formData.delivery_type === opt.value ? '#ffffff' : '#1a1a1a',
@@ -264,6 +320,39 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
               <option key={commune} value={commune}>{commune}</option>
             ))}
           </select>
+          {errors.commune && (
+            <p className="text-xs text-red-500 mt-1 text-right">{errors.commune}</p>
+          )}
+        </div>
+      )}
+
+      {/* Stop desk office — only for office delivery after wilaya selected */}
+      {formData.delivery_type === 'office' && formData.wilaya && (
+        <div>
+          <label className="block font-heading font-bold text-sm text-brand mb-2 text-right">
+            مكتب الاستلام
+          </label>
+          <select
+            value={formData.commune}
+            onChange={e => setFormData(d => ({ ...d, commune: e.target.value }))}
+            disabled={loadingOffices || officesPending || !!officeError || (officesLoaded && officeCommunes.length === 0)}
+            className="w-full bg-white border border-border rounded-xl px-4 py-3 text-sm text-brand focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 text-right disabled:bg-surface disabled:text-muted"
+          >
+            <option value="">
+              {loadingOffices || officesPending ? 'جارٍ تحميل المكاتب...' : 'اختاري مكتب الاستلام'}
+            </option>
+            {officeCommunes.map(commune => (
+              <option key={`${commune.name}-${commune.code_postal ?? ''}`} value={commune.name}>
+                {commune.name}
+              </option>
+            ))}
+          </select>
+          {officeError && (
+            <p className="text-xs text-red-500 mt-1 text-right">{officeError}</p>
+          )}
+          {officesLoaded && !loadingOffices && !officeError && officeCommunes.length === 0 && (
+            <p className="text-xs text-red-500 mt-1 text-right">لا توجد مكاتب استلام متاحة لهذه الولاية حالياً</p>
+          )}
           {errors.commune && (
             <p className="text-xs text-red-500 mt-1 text-right">{errors.commune}</p>
           )}
@@ -333,7 +422,13 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
         </p>
       )}
 
-      <Button type="submit" fullWidth size="lg" loading={submitting} disabled={submitting}>
+      <Button
+        type="submit"
+        fullWidth
+        size="lg"
+        loading={submitting}
+        disabled={submitting || (formData.delivery_type === 'office' && (loadingOffices || officesPending || !!officeError))}
+      >
         {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
       </Button>
     </form>

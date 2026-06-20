@@ -81,6 +81,94 @@ export const WILAYA_CODE_BY_NUMBER: Record<string, number> = {
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
 
+function ecotrackHeaders(contentType?: string) {
+  return {
+    Accept: 'application/json',
+    Authorization: `Bearer ${TOKEN}`,
+    ...(contentType && { 'Content-Type': contentType }),
+  }
+}
+
+function formBody(params: Record<string, string | undefined>) {
+  const body = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) body.set(key, value)
+  })
+  return body
+}
+
+type EcotrackCommune = {
+  nom?: unknown
+  wilaya_id?: unknown
+  code_postal?: unknown
+  has_stop_desk?: unknown
+}
+
+export type EcotrackCommuneOption = {
+  name: string
+  wilaya_id: number
+  code_postal: string | null
+  has_stop_desk: boolean
+}
+
+function parseCommunes(data: unknown): EcotrackCommune[] {
+  if (Array.isArray(data)) return data as EcotrackCommune[]
+  if (data && typeof data === 'object') return Object.values(data) as EcotrackCommune[]
+  return []
+}
+
+export async function ecotrackGetCommunes(wilayaId: number): Promise<{
+  success: boolean
+  communes?: EcotrackCommuneOption[]
+  message?: string
+}> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/get/communes?wilaya_id=${encodeURIComponent(String(wilayaId))}`, {
+      headers: ecotrackHeaders(),
+      cache: 'no-store',
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) {
+      return { success: false, message: 'Unable to fetch Ecotrack communes' }
+    }
+
+    const communes = parseCommunes(data)
+      .filter(item =>
+        Number(item.wilaya_id) === wilayaId &&
+        typeof item.nom === 'string' &&
+        item.nom.trim()
+      )
+      .map(item => ({
+        name: String(item.nom).trim(),
+        wilaya_id: wilayaId,
+        code_postal: item.code_postal ? String(item.code_postal) : null,
+        has_stop_desk: Number(item.has_stop_desk) === 1,
+      }))
+
+    return { success: true, communes }
+  } catch {
+    return { success: false, message: 'Network error' }
+  }
+}
+
+export async function ecotrackGetStopDeskCommune(wilayaId: number): Promise<{
+  success: boolean
+  commune?: string
+  message?: string
+}> {
+  const result = await ecotrackGetCommunes(wilayaId)
+  if (!result.success || !result.communes) {
+    return { success: false, message: result.message }
+  }
+
+  const commune = result.communes.find(item => item.has_stop_desk)?.name
+  if (!commune) {
+      return { success: false, message: 'No Ecotrack stop desk commune found' }
+  }
+
+  return { success: true, commune }
+}
+
 // CREATE order (draft)
 export async function ecotrackCreateOrder(params: {
   nom_client: string
@@ -96,8 +184,7 @@ export async function ecotrackCreateOrder(params: {
   reference?: string
 }): Promise<{ success: boolean; tracking?: string; message?: string }> {
   try {
-    const query = new URLSearchParams({
-      api_token: TOKEN!,
+    const body = formBody({
       nom_client: params.nom_client,
       telephone: params.telephone,
       adresse: params.adresse,
@@ -113,9 +200,10 @@ export async function ecotrackCreateOrder(params: {
       ...(params.reference && { reference: params.reference }),
     })
 
-    const res = await fetch(`${BASE_URL}/api/v1/create/order?${query}`, {
+    const res = await fetch(`${BASE_URL}/api/v1/create/order`, {
       method: 'POST',
-      headers: { 'Accept': 'application/json' },
+      headers: ecotrackHeaders('application/x-www-form-urlencoded'),
+      body,
     })
 
     const data = await res.json()
@@ -129,10 +217,12 @@ export async function ecotrackCreateOrder(params: {
 // SHIP order (validate)
 export async function ecotrackShipOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
   try {
-    const res = await fetch(
-      `${BASE_URL}/api/v1/valid/order?api_token=${TOKEN}&tracking=${tracking}&ask_collection=0`,
-      { method: 'POST', headers: { 'Accept': 'application/json' } }
-    )
+    const body = formBody({ tracking, ask_collection: '0' })
+    const res = await fetch(`${BASE_URL}/api/v1/valid/order`, {
+      method: 'POST',
+      headers: ecotrackHeaders('application/x-www-form-urlencoded'),
+      body,
+    })
     const data = await res.json().catch(() => ({}))
     return { success: res.ok, message: data.message }
   } catch {
@@ -152,19 +242,23 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
   remarque?: string
 }): Promise<{ success: boolean; message?: string }> {
   try {
-    const query = new URLSearchParams({ api_token: TOKEN!, tracking, type: '1' })
-    if (params.client) query.set('client', params.client)
-    if (params.adresse) query.set('adresse', params.adresse)
-    if (params.commune) query.set('commune', params.commune)
-    if (params.wilaya) query.set('wilaya', String(params.wilaya))
-    if (params.montant) query.set('montant', String(params.montant))
-    if (params.tel) query.set('tel', params.tel)
-    if (params.tel2) query.set('tel2', params.tel2)
-    if (params.remarque) query.set('remarque', params.remarque)
+    const body = formBody({
+      tracking,
+      type: '1',
+      client: params.client,
+      adresse: params.adresse,
+      commune: params.commune,
+      wilaya: params.wilaya ? String(params.wilaya) : undefined,
+      montant: params.montant ? String(params.montant) : undefined,
+      tel: params.tel,
+      tel2: params.tel2,
+      remarque: params.remarque,
+    })
 
-    const res = await fetch(`${BASE_URL}/api/v1/update/order?${query}`, {
+    const res = await fetch(`${BASE_URL}/api/v1/update/order`, {
       method: 'POST',
-      headers: { 'Accept': 'application/json' },
+      headers: ecotrackHeaders('application/x-www-form-urlencoded'),
+      body,
     })
     const data = await res.json().catch(() => ({}))
     return { success: res.ok, message: data.message }
@@ -176,10 +270,12 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
 // DELETE order
 export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
   try {
-    const res = await fetch(
-      `${BASE_URL}/api/v1/delete/order?api_token=${TOKEN}&tracking=${tracking}`,
-      { method: 'DELETE', headers: { 'Accept': 'application/json' } }
-    )
+    const body = formBody({ tracking })
+    const res = await fetch(`${BASE_URL}/api/v1/delete/order`, {
+      method: 'DELETE',
+      headers: ecotrackHeaders('application/x-www-form-urlencoded'),
+      body,
+    })
     const data = await res.json().catch(() => ({}))
     return { success: res.ok, message: data.message }
   } catch {
