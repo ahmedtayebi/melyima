@@ -1,43 +1,88 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { rateLimitPublicApi } from '@/lib/rate-limit'
 
 type IncomingOrderItem = {
-  product_id?: string | null
-  product_name: string
+  product_id: string
   color_id: string
-  color_name: string
-  color_hex: string
-  color_image_url?: string | null
   size_id: string
-  size_label: string
   quantity: number
+}
+
+const MAX_ITEMS = 50
+const MAX_QUANTITY_PER_ITEM = 20
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function normalizeWilayaCode(value: unknown) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^\d+$/.test(raw)) return raw.padStart(2, '0')
+  return raw
+}
+
+function normalizePhone(value: unknown) {
+  return String(value ?? '').replace(/\s+/g, '').trim()
+}
+
+function getOrderErrorMessage(message: string) {
+  if (message.includes('insufficient_stock')) {
+    return { status: 400, error: 'المنتج غير متوفر بالكمية المطلوبة' }
+  }
+
+  if (message.includes('product_unavailable')) {
+    return { status: 400, error: 'منتج غير متوفر' }
+  }
+
+  if (
+    message.includes('invalid_order_items') ||
+    message.includes('invalid_delivery_type') ||
+    message.includes('invalid_delivery_price') ||
+    message.includes('invalid_address') ||
+    message.includes('invalid_customer') ||
+    message.includes('invalid_phone')
+  ) {
+    return { status: 400, error: 'بيانات غير مكتملة' }
+  }
+
+  return { status: 500, error: 'تعذّر إنشاء الطلب' }
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const rateLimited = await rateLimitPublicApi(req, 'orders')
+    if (rateLimited) return rateLimited
+
     const body = await req.json()
     const {
-      customer_name, phone, phone2, wilaya, wilaya_name, commune,
-      delivery_type, delivery_price, products_total, total_price,
-      address, notes, items,
+      customer_name, phone, phone2, wilaya, commune,
+      delivery_type, address, notes, items,
     } = body
 
     // ── Validate ──────────────────────────────────────────────
+    const safeItems = Array.isArray(items) ? (items as Partial<IncomingOrderItem>[]) : []
+    const phoneNormalized = normalizePhone(phone)
+    const phone2Normalized = phone2 ? normalizePhone(phone2) : null
+    const wilayaCode = normalizeWilayaCode(wilaya)
+
     if (
       !customer_name?.trim() ||
-      !phone?.trim() ||
-      !wilaya ||
-      !Array.isArray(items) ||
-      items.length === 0 ||
-      items.some((item: Partial<IncomingOrderItem>) =>
+      !phoneNormalized ||
+      !/^0[567]\d{8}$/.test(phoneNormalized) ||
+      (phone2Normalized && !/^0[567]\d{8}$/.test(phone2Normalized)) ||
+      !wilayaCode ||
+      safeItems.length === 0 ||
+      safeItems.length > MAX_ITEMS ||
+      safeItems.some((item) =>
+        !item.product_id ||
+        !UUID_PATTERN.test(String(item.product_id)) ||
         !item.color_id ||
+        !UUID_PATTERN.test(String(item.color_id)) ||
         !item.size_id ||
-        !item.product_name ||
-        !item.color_name ||
-        !item.color_hex ||
-        !item.size_label ||
-        !Number.isFinite(Number(item.quantity)) ||
-        Number(item.quantity) <= 0
+        !UUID_PATTERN.test(String(item.size_id)) ||
+        !Number.isInteger(Number(item.quantity)) ||
+        Number(item.quantity) <= 0 ||
+        Number(item.quantity) > MAX_QUANTITY_PER_ITEM
       )
     ) {
       return NextResponse.json(
@@ -53,114 +98,73 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
-    )
-
-    const safeItems = items as IncomingOrderItem[]
-    const trackedItems: IncomingOrderItem[] = []
-
-    // Missing variants are treated as unlimited stock for backward compatibility.
-    for (const item of safeItems) {
-      const { data: variant, error: variantError } = await supabase
-        .from('product_variants')
-        .select('stock')
-        .eq('color_id', item.color_id)
-        .eq('size_id', item.size_id)
-        .maybeSingle()
-
-      if (variantError) {
-        console.error('Stock check error:', variantError)
-        return NextResponse.json(
-          { success: false, error: 'تعذّر التحقق من المخزون' },
-          { status: 500 }
-        )
-      }
-
-      if (!variant) continue
-      trackedItems.push(item)
-
-      if (Number(variant.stock) < Number(item.quantity)) {
-        return NextResponse.json(
-          { success: false, error: 'المنتج غير متوفر بالكمية المطلوبة' },
-          { status: 400 }
-        )
-      }
+    const deliveryEntry = DELIVERY_PRICES.find(entry => entry.code === wilayaCode)
+    if (!deliveryEntry) {
+      return NextResponse.json(
+        { success: false, error: 'الولاية غير صحيحة' },
+        { status: 400 }
+      )
     }
 
-    // ── Insert order ──────────────────────────────────────────
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .insert({
-        customer_name: String(customer_name).trim(),
-        phone: String(phone).trim(),
-        phone2: phone2 ? String(phone2).trim() : null,
-        wilaya: String(wilaya),
-        wilaya_name: String(wilaya_name ?? ''),
-        delivery_type: String(delivery_type),
-        delivery_price: Number(delivery_price),
-        products_total: Number(products_total),
-        total_price: Number(total_price),
-        address: address ? String(address).trim() : null,
-        commune: commune ? String(commune) : null,
-        notes: notes ? String(notes).trim() : null,
-        status: 'pending',
-      })
-      .select('id')
-      .single()
+    if (delivery_type === 'home' && (!String(commune ?? '').trim() || !String(address ?? '').trim())) {
+      return NextResponse.json(
+        { success: false, error: 'العنوان والبلدية مطلوبان للتوصيل للمنزل' },
+        { status: 400 }
+      )
+    }
 
-    if (orderError || !order) {
-      console.error('Order insert error:', orderError)
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) {
+      console.error('SUPABASE_SERVICE_ROLE_KEY is required for atomic order creation')
       return NextResponse.json(
         { success: false, error: 'تعذّر إنشاء الطلب' },
         { status: 500 }
       )
     }
 
-    // ── Insert order items ────────────────────────────────────
-    const orderItems = safeItems.map((item) => ({
-      order_id: order.id,
-      product_id: item.product_id ?? null,
-      product_name: String(item.product_name),
-      color_name: String(item.color_name),
-      color_hex: String(item.color_hex),
-      color_image_url: item.color_image_url ?? null,
-      size_label: String(item.size_label),
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceRoleKey,
+      {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }
+    )
+
+    const deliveryPrice = delivery_type === 'home' ? deliveryEntry.home : deliveryEntry.office
+    const rpcItems = safeItems.map(item => ({
+      product_id: String(item.product_id),
+      color_id: String(item.color_id),
+      size_id: String(item.size_id),
       quantity: Number(item.quantity),
     }))
 
-    const { error: itemsError } = await supabase
-      .from('order_items')
-      .insert(orderItems)
+    const { data: orderId, error: orderError } = await supabase.rpc('create_order_with_stock', {
+      p_customer_name: String(customer_name).trim(),
+      p_phone: phoneNormalized,
+      p_phone2: phone2Normalized,
+      p_wilaya: wilayaCode,
+      p_wilaya_name: deliveryEntry.name,
+      p_delivery_type: String(delivery_type),
+      p_delivery_price: deliveryPrice,
+      p_address: address ? String(address).trim() : null,
+      p_commune: commune ? String(commune).trim() : null,
+      p_notes: notes ? String(notes).trim() : null,
+      p_items: rpcItems,
+    })
 
-    if (itemsError) {
-      console.error('Order items insert error:', itemsError)
-      await supabase.from('orders').delete().eq('id', order.id)
+    if (orderError || !orderId) {
+      console.error('Order RPC error:', orderError)
+      const mapped = getOrderErrorMessage(orderError?.message ?? '')
       return NextResponse.json(
-        { success: false, error: 'تعذّر حفظ تفاصيل الطلب' },
-        { status: 500 }
+        { success: false, error: mapped.error },
+        { status: mapped.status }
       )
     }
 
-    // ── Decrement managed stock ───────────────────────────────
-    for (const item of trackedItems) {
-      const { error: stockError } = await supabase.rpc('decrement_stock', {
-        p_color_id: item.color_id,
-        p_size_id: item.size_id,
-        p_quantity: Number(item.quantity),
-      })
-
-      if (stockError) {
-        console.error('Stock decrement error:', stockError)
-        return NextResponse.json(
-          { success: false, error: 'تعذّر تحديث المخزون' },
-          { status: 500 }
-        )
-      }
-    }
-
-    return NextResponse.json({ success: true, order_id: order.id })
+    return NextResponse.json({ success: true, order_id: orderId })
   } catch (err) {
     console.error('Unexpected error in POST /api/orders:', err)
     return NextResponse.json(
