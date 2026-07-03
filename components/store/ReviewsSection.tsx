@@ -100,8 +100,8 @@ function ReviewCard({
 
   const photos  = review.images?.filter(Boolean) ?? []
   const date    = new Date(review.created_at).toLocaleDateString('ar-DZ', { year: 'numeric', month: 'long' })
-  const isLong  = review.comment.length > 150
-  const shown   = expanded || !isLong ? review.comment : review.comment.slice(0, 150)
+  const isLong  = review.comment.length > 120
+  const shown   = expanded || !isLong ? review.comment : review.comment.slice(0, 120)
 
   return (
     <motion.div
@@ -109,30 +109,57 @@ function ReviewCard({
       initial={shouldReduceMotion ? false : { opacity: 0, y: 18 }}
       animate={inView ? { opacity: 1, y: 0 } : {}}
       transition={{ duration: 0.45, delay: Math.min(index * 0.05, 0.35), ease: EASE }}
-      className="mb-5 break-inside-avoid bg-white rounded-2xl overflow-hidden"
+      className="bg-white rounded-2xl overflow-hidden snap-start flex-shrink-0 w-[82vw] sm:w-[360px] lg:w-auto"
       style={{
         border: `1px solid ${BORDER}`,
-        borderTop: `3px solid ${ACCENT}`,
         boxShadow: '0 2px 20px rgba(26,20,16,0.055)',
       }}
     >
-      <div className="p-5">
+      {photos.length > 0 && (
+        <button
+          type="button"
+          onClick={() => onImageClick(photos[0])}
+          className="relative block w-full aspect-[4/3] overflow-hidden text-right"
+          aria-label="فتح صورة التقييم"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={photos[0]} alt="" className="w-full h-full object-cover" />
+          {photos.length > 1 && (
+            <span
+              className="absolute bottom-3 left-3 rounded-full px-2.5 py-1 text-[11px] font-heading font-bold"
+              style={{ background: 'rgba(26,20,16,0.82)', color: '#fff' }}
+            >
+              +{photos.length - 1}
+            </span>
+          )}
+        </button>
+      )}
 
-        {/* Stars + decorative quote watermark */}
-        <div className="flex items-start justify-between mb-3">
-          <Stars rating={review.rating} size={15} />
-          <span
-            className="font-heading font-black text-5xl leading-none select-none pointer-events-none"
-            style={{ color: `${ACCENT}18`, marginTop: '-4px' }}
-            aria-hidden="true"
-          >
-            "
-          </span>
+      <div className="p-4">
+
+        {/* Author + stars */}
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div
+              className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 font-heading font-black text-sm"
+              style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT2})`, color: BRAND }}
+              aria-hidden="true"
+            >
+              {review.customer_name.charAt(0)}
+            </div>
+            <div className="text-right min-w-0">
+              <p className="font-heading font-bold text-sm truncate" style={{ color: BRAND }}>
+                {review.customer_name}
+              </p>
+              <p className="font-body text-xs" style={{ color: MUTED }}>{date}</p>
+            </div>
+          </div>
+          <Stars rating={review.rating} size={14} />
         </div>
 
         {/* Comment */}
         <p
-          className="font-body text-sm leading-relaxed text-right"
+          className="font-body text-sm leading-relaxed text-right min-h-[52px]"
           style={{ color: `${BRAND}CC` }}
         >
           {shown}
@@ -152,15 +179,15 @@ function ReviewCard({
         )}
 
         {/* Photos */}
-        {photos.length > 0 && (
-          <div className="flex gap-2 mt-4 justify-end flex-wrap">
-            {photos.map((url, i) => (
+        {photos.length > 1 && (
+          <div className="flex gap-2 mt-4 justify-end">
+            {photos.slice(1, 4).map((url, i) => (
               <button
                 key={i}
                 onClick={() => onImageClick(url)}
-                className="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0 hover:opacity-85 transition-opacity duration-150 cursor-pointer"
+                className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 hover:opacity-85 transition-opacity duration-150 cursor-pointer"
                 style={{ border: `1px solid ${BORDER}` }}
-                aria-label={`فتح الصورة ${i + 1}`}
+                aria-label={`فتح الصورة ${i + 2}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={url} alt="" className="w-full h-full object-cover" />
@@ -168,26 +195,6 @@ function ReviewCard({
             ))}
           </div>
         )}
-
-        {/* Author row */}
-        <div
-          className="flex items-center justify-end gap-3 mt-4 pt-4"
-          style={{ borderTop: `1px solid ${BORDER}` }}
-        >
-          <div className="text-right">
-            <p className="font-heading font-bold text-sm" style={{ color: BRAND }}>
-              {review.customer_name}
-            </p>
-            <p className="font-body text-xs" style={{ color: MUTED }}>{date}</p>
-          </div>
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 font-heading font-black text-sm"
-            style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT2})`, color: BRAND }}
-            aria-hidden="true"
-          >
-            {review.customer_name.charAt(0)}
-          </div>
-        </div>
 
       </div>
     </motion.div>
@@ -354,8 +361,10 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
 
         ) : (
 
-          /* CSS masonry columns — no JavaScript layout needed */
-          <div className="columns-1 sm:columns-2 lg:columns-3 gap-5">
+          <div
+            className="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 lg:pb-0 lg:grid lg:grid-cols-3 lg:overflow-visible"
+            style={{ scrollbarWidth: 'thin' }}
+          >
             {reviews.map((review, i) => (
               <ReviewCard
                 key={review.id}
