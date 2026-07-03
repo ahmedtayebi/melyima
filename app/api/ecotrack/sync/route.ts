@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 import { requireAdmin } from '../_auth'
 
 const BASE_URL = process.env.ECOTRACK_API_URL
@@ -30,7 +29,7 @@ function mapStatus(ecotrackStatus: string): { status: 'delivered' | 'cancelled' 
   return { status: 'confirmed', ecotrack_status: 'shipped' }
 }
 
-async function fetchAllPages(url: string, label: string): Promise<EcotrackOrder[]> {
+async function fetchAllPages(url: string): Promise<EcotrackOrder[]> {
   const results: EcotrackOrder[] = []
   let page = 1
   let hasMore = true
@@ -67,8 +66,7 @@ export async function POST() {
 
     // ── Fetch all orders from Ecotrack ────────────────────────
     const allOrders = await fetchAllPages(
-      `${BASE_URL}/api/v1/get/orders?per_page=${PER_PAGE}`,
-      'ecotrack'
+      `${BASE_URL}/api/v1/get/orders?per_page=${PER_PAGE}`
     )
 
     if (allOrders.length === 0) {
@@ -83,7 +81,7 @@ export async function POST() {
     const trackingNumbers = allOrders.map(o => o.tracking).filter(Boolean)
     const { data: dbOrders, error: dbQueryError } = await supabase
       .from('orders')
-      .select('id, ecotrack_tracking')
+      .select('id, ecotrack_tracking, order_items!inner(id)')
       .in('ecotrack_tracking', trackingNumbers)
 
     if (dbQueryError) {
@@ -117,44 +115,7 @@ export async function POST() {
       }
     }
 
-    // ── Phase 2: import new orders ────────────────────────────
-    const existingTrackings = new Set((dbOrders ?? []).map(o => o.ecotrack_tracking))
-    const newOrders = allOrders.filter(o => o.tracking && !existingTrackings.has(o.tracking))
-
-    let imported = 0
-    if (newOrders.length > 0) {
-      const rows = newOrders.map(item => {
-        const deliveryEntry = DELIVERY_PRICES.find(e => parseInt(e.code) === item.wilaya_id)
-        const isOffice = item.stop_desk === 1
-        const delivery_price = deliveryEntry ? (isOffice ? deliveryEntry.office : deliveryEntry.home) : 0
-        const total_price = Number(item.montant)
-        const products_total = Math.max(0, total_price - delivery_price)
-
-        return {
-          customer_name: item.client,
-          phone: item.phone,
-          phone2: item.phone_2 ?? null,
-          wilaya: String(item.wilaya_id).padStart(2, '0'),
-          wilaya_name: deliveryEntry?.name ?? null,
-          commune: null,
-          delivery_type: isOffice ? 'office' : 'home',
-          delivery_price,
-          products_total,
-          total_price,
-          address: item.adresse ?? null,
-          notes: null,
-          created_at: item.created_at ? new Date(item.created_at).toISOString() : undefined,
-          ...mapStatus(item.status),
-          ecotrack_tracking: item.tracking,
-        }
-      })
-
-      const { error } = await supabase.from('orders').upsert(rows, { onConflict: 'ecotrack_tracking', ignoreDuplicates: true })
-      if (error) console.error('Sync upsert error:', error.message)
-      else imported = rows.length
-    }
-
-    return NextResponse.json({ success: true, updated, imported, total: allOrders.length })
+    return NextResponse.json({ success: true, updated, imported: 0, total: allOrders.length })
   } catch (err) {
     console.error('Ecotrack sync error:', err)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

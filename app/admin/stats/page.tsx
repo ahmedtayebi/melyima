@@ -7,7 +7,7 @@ export default async function StatsPage() {
   const supabase = await createClient()
   const { data: orders, error } = await supabase
     .from('orders')
-    .select('id, status, total_price, products_total, delivery_price, wilaya_name, wilaya, created_at, order_items(product_name, quantity)')
+    .select('id, status, total_price, products_total, delivery_price, wilaya_name, wilaya, created_at, order_items!inner(product_name, quantity)')
     .order('created_at', { ascending: false })
     .limit(5000)
 
