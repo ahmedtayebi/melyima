@@ -65,24 +65,29 @@ export function getClientIp(req: NextRequest) {
 }
 
 export async function rateLimitPublicApi(req: NextRequest, name: PublicLimiterName) {
-  const config = getLimiter(name)
+  let config: LimiterConfig | null = null
+
+  try {
+    config = getLimiter(name)
+  } catch (err) {
+    console.error('Upstash rate limiter configuration error:', err)
+    return null
+  }
 
   if (!config) {
-    const message = 'خدمة الحماية من كثرة الطلبات غير مفعّلة حالياً. يرجى المحاولة لاحقاً.'
-
-    if (process.env.NODE_ENV === 'production') {
-      return NextResponse.json(
-        { success: false, error: message },
-        { status: 503 }
-      )
-    }
-
     console.warn('Upstash rate limiting skipped: missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN')
     return null
   }
 
   const ip = getClientIp(req)
-  const result = await config.limiter.limit(ip)
+  let result: Awaited<ReturnType<Ratelimit['limit']>>
+
+  try {
+    result = await config.limiter.limit(ip)
+  } catch (err) {
+    console.error('Upstash rate limiter request error:', err)
+    return null
+  }
 
   if (result.success) return null
 
