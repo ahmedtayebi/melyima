@@ -41,35 +41,20 @@ export async function DELETE(_: Request, { params }: Props) {
       }
     )
 
-    const { error: itemsError } = await supabase
-      .from('order_items')
-      .delete()
-      .eq('order_id', id)
+    const { data: restoredItems, error: orderError } = await supabase.rpc(
+      'delete_order_with_stock',
+      { p_order_id: id }
+    )
 
-    if (itemsError) {
-      console.error('Order items delete error:', itemsError)
-      return NextResponse.json(
-        { success: false, error: 'تعذّر حذف عناصر الطلب' },
-        { status: 500 }
-      )
-    }
-
-    const { data: deletedOrder, error: orderError } = await supabase
-      .from('orders')
-      .delete()
-      .eq('id', id)
-      .select('id')
-      .single()
-
-    if (orderError || !deletedOrder) {
-      console.error('Order delete error:', orderError)
+    if (orderError) {
+      console.error('Order delete RPC error:', orderError)
       return NextResponse.json(
         { success: false, error: 'تعذّر حذف الطلب' },
-        { status: orderError?.code === 'PGRST116' ? 404 : 500 }
+        { status: orderError.message.includes('order_not_found') ? 404 : 500 }
       )
     }
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, restored_items: restoredItems ?? 0 })
   } catch (err) {
     console.error('Unexpected error in DELETE /api/orders/[id]:', err)
     return NextResponse.json(

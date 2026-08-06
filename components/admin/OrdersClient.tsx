@@ -229,7 +229,7 @@ export default function OrdersClient({ initialOrders }: Props) {
           if (data.success) {
             setOrders(prev => prev.filter(item => item.id !== order.id))
             if (expandedId === order.id) setExpandedId(null)
-            showToast('تم حذف الطلب نهائياً', 'success')
+            showToast('تم حذف الطلب وإرجاع المخزون', 'success')
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
           }
