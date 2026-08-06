@@ -213,6 +213,33 @@ export default function OrdersClient({ initialOrders }: Props) {
     }
   }
 
+  const deleteOrder = (order: Order) => {
+    setConfirmDialog({
+      message: `حذف طلب ${order.customer_name} نهائياً من لوحة التحكم؟ لا يمكن التراجع عن هذا الإجراء.`,
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setLoading(order.id, 'delete-order', true)
+
+        try {
+          const res = await fetch(`/api/orders/${order.id}`, {
+            method: 'DELETE',
+          })
+          const data = await res.json()
+
+          if (data.success) {
+            setOrders(prev => prev.filter(item => item.id !== order.id))
+            if (expandedId === order.id) setExpandedId(null)
+            showToast('تم حذف الطلب نهائياً', 'success')
+          } else {
+            showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
+          }
+        } finally {
+          setLoading(order.id, 'delete-order', false)
+        }
+      },
+    })
+  }
+
   const formatDate = (d: string) => {
     const dt = new Date(d)
     return `${dt.getDate()}/${dt.getMonth() + 1}/${dt.getFullYear()}`
@@ -461,6 +488,17 @@ export default function OrdersClient({ initialOrders }: Props) {
                         <span className="text-xs font-body text-muted px-2">
                         </span>
                       )}
+                      <button
+                        onClick={() => deleteOrder(order)}
+                        disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                        className="p-1.5 rounded-lg text-muted hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                        aria-label="حذف الطلب نهائياً"
+                        title="حذف الطلب نهائياً"
+                      >
+                        {ecotrackLoading[`${order.id}-delete-order`]
+                          ? <Loader2 size={15} className="animate-spin" />
+                          : <Trash2 size={15} />}
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -594,6 +632,16 @@ export default function OrdersClient({ initialOrders }: Props) {
                   لا إجراء
                 </span>
               )}
+              <button
+                onClick={() => deleteOrder(order)}
+                disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
+              >
+                {ecotrackLoading[`${order.id}-delete-order`]
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <Trash2 size={12} />}
+                حذف
+              </button>
             </div>
             {expandedId === order.id && (
               <div className="space-y-2 pt-1">

@@ -70,11 +70,11 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
   const handleDeleteProduct = async (id: string) => {
     if (!confirm('هل أنت متأكد من حذف هذا المنتج؟')) return
     setDeletingId(id)
-    await supabase.from('product_colors').delete().eq('product_id', id)
-    await supabase.from('product_sizes').delete().eq('product_id', id)
     const { error } = await supabase.from('products').delete().eq('id', id)
     if (!error) {
       setProducts(prev => prev.filter(p => p.id !== id))
+    } else {
+      alert('تعذّر حذف المنتج: ' + error.message)
     }
     setDeletingId(null)
   }

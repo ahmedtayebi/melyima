@@ -81,6 +81,8 @@ export interface OrderItem {
   id: string
   order_id: string
   product_id: string | null
+  color_id?: string | null
+  size_id?: string | null
   product_name: string
   color_name: string
   color_hex: string
