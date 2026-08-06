@@ -100,8 +100,19 @@ export default function ProductForm({ productId, initialData, categories = [] }:
 
   const [name, setName] = useState(initialData?.name ?? '')
   const [description, setDescription] = useState(initialData?.description ?? '')
-  const [price, setPrice] = useState<string>(initialData?.price !== undefined ? String(initialData.price) : '')
-  const [originalPrice, setOriginalPrice] = useState<string>(initialData?.original_price ? String(initialData.original_price) : '')
+  const hasInitialDiscount = Boolean(
+    initialData?.original_price &&
+    initialData.original_price > 0 &&
+    initialData.original_price > initialData.price
+  )
+  const [originalPrice, setOriginalPrice] = useState<string>(
+    initialData
+      ? String(hasInitialDiscount ? initialData.original_price : initialData.price)
+      : ''
+  )
+  const [price, setPrice] = useState<string>(
+    initialData && hasInitialDiscount ? String(initialData.price) : ''
+  )
   const [isVisible, setIsVisible] = useState(initialData?.is_visible ?? true)
   const [categoryId, setCategoryId] = useState<string>(initialData?.category_id ?? '')
   const [colors, setColors] = useState<ColorEntry[]>(buildInitialColors(initialData))
@@ -189,7 +200,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         return img.existing ? { ...img, toDelete: true } : null!
       }).filter(Boolean)
       // Re-number sort_order
-      const reNumbered = images.map((img, i) => img.toDelete ? img : { ...img, sort_order: images.filter(x => !x.toDelete).indexOf(img) })
+      const reNumbered = images.map((img) => img.toDelete ? img : { ...img, sort_order: images.filter(x => !x.toDelete).indexOf(img) })
       return { ...c, images: reNumbered }
     }))
   }, [])
@@ -275,8 +286,25 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   const handleSave = async () => {
     setError('')
     if (!name.trim()) { setError('يرجى إدخال اسم المنتج'); return }
-    const priceNum = Number(price)
-    if (price === '' || isNaN(priceNum) || priceNum < 0) { setError('يرجى إدخال سعر صحيح'); return }
+    const originalPriceNum = Number(originalPrice)
+    const hasDiscountPrice = price.trim() !== ''
+    const discountPriceNum = hasDiscountPrice ? Number(price) : originalPriceNum
+
+    if (originalPrice === '' || isNaN(originalPriceNum) || originalPriceNum <= 0) {
+      setError('يرجى إدخال السعر الأصلي')
+      return
+    }
+    if (hasDiscountPrice && (isNaN(discountPriceNum) || discountPriceNum <= 0)) {
+      setError('يرجى إدخال سعر مخفض صحيح')
+      return
+    }
+    if (discountPriceNum > originalPriceNum) {
+      setError('السعر المخفض يجب أن يكون أقل من السعر الأصلي')
+      return
+    }
+
+    const savedPrice = discountPriceNum
+    const savedOriginalPrice = discountPriceNum < originalPriceNum ? originalPriceNum : 0
 
     const activeColors = colors.filter(c => !c.toDelete)
     if (activeColors.length === 0) { setError('يرجى إضافة لون واحد على الأقل'); return }
@@ -292,8 +320,8 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         .upsert({
           id: productId,
           name: name.trim(),
-          price: priceNum,
-          original_price: Number(originalPrice) || 0,
+          price: savedPrice,
+          original_price: savedOriginalPrice,
           description: description.trim() || null,
           is_visible: isVisible,
           category_id: categoryId || null,
@@ -498,28 +526,33 @@ export default function ProductForm({ productId, initialData, categories = [] }:
 
       {/* Price */}
       <section className="bg-white rounded-xl border border-border p-5 space-y-4">
-        <h2 className="font-heading font-bold text-base text-brand">السعر بالدينار الجزائري</h2>
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={price}
-          onChange={e => setPrice(e.target.value)}
-          placeholder="مثال: 2500"
-          className="w-full border border-border rounded-xl px-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 font-body"
-          dir="ltr"
-        />
+        <h2 className="font-heading font-bold text-base text-brand">أسعار المنتج بالدينار الجزائري</h2>
         <div>
           <label className="block font-heading font-bold text-sm text-brand mb-2 text-right">
-            السعر الأصلي قبل التخفيض <span className="text-muted font-body font-normal">(اتركه 0 إذا لا يوجد تخفيض)</span>
+            السعر الأصلي
           </label>
           <input
             type="number"
-            min={0}
+            min={1}
             step={1}
             value={originalPrice}
             onChange={e => setOriginalPrice(e.target.value)}
             placeholder="مثال: 7000"
+            className="w-full border border-border rounded-xl px-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 font-body"
+            dir="ltr"
+          />
+        </div>
+        <div>
+          <label className="block font-heading font-bold text-sm text-brand mb-2 text-right">
+            السعر المخفض <span className="text-muted font-body font-normal">(اختياري)</span>
+          </label>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={price}
+            onChange={e => setPrice(e.target.value)}
+            placeholder="مثال: 5500"
             className="w-full border border-border rounded-xl px-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 font-body"
             dir="ltr"
           />

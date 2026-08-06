@@ -15,7 +15,7 @@ export default async function EditProductPage({ params }: Props) {
     supabase
       .from('products')
       .select(
-        `id, name, price, description, is_visible, category_id, created_at, updated_at,
+        `id, name, price, original_price, description, is_visible, category_id, created_at, updated_at,
          product_colors(id, product_id, name, hex_code, image_url, is_visible,
            product_color_images(id, color_id, image_url, sort_order)),
          product_sizes(id, product_id, label, is_visible, sort_order)`

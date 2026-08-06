@@ -85,6 +85,8 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
     return first?.image_url ?? null
   }
 
+  const formatPrice = (value: number) => `${value.toLocaleString('ar-DZ')} دج`
+
   return (
     <div className="space-y-6">
 
@@ -203,6 +205,11 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((product) => {
             const hasOutOfStockVariant = product.product_variants?.some(variant => variant.stock === 0) ?? false
+            const hasDiscount = product.original_price > 0 && product.original_price > product.price
+            const discountAmount = hasDiscount ? product.original_price - product.price : 0
+            const discountPercent = hasDiscount
+              ? Math.round((discountAmount / product.original_price) * 100)
+              : 0
 
             return (
             <div
@@ -252,6 +259,30 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                   {product.product_colors?.length ?? 0} لون ·{' '}
                   {product.product_sizes?.length ?? 0} مقاس
                 </p>
+                <div className="mb-3 rounded-xl bg-surface/70 border border-border px-3 py-2 text-right">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-muted font-body">السعر الأصلي</span>
+                    <span className="font-heading font-bold text-xs text-brand tabular-nums">
+                      {formatPrice(hasDiscount ? product.original_price : product.price)}
+                    </span>
+                  </div>
+                  {hasDiscount && (
+                    <>
+                      <div className="flex items-center justify-between gap-2 mt-1">
+                        <span className="text-[11px] text-muted font-body">السعر المخفض</span>
+                        <span className="font-heading font-black text-sm text-accent tabular-nums">
+                          {formatPrice(product.price)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-1">
+                        <span className="text-[11px] text-muted font-body">قيمة التخفيض</span>
+                        <span className="font-heading font-bold text-xs text-green-700 tabular-nums">
+                          {formatPrice(discountAmount)} · {discountPercent}%
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 {/* Actions */}
                 <div className="flex items-center justify-between">
