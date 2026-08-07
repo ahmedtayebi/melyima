@@ -15,7 +15,7 @@ interface OrderFormProps {
   onSuccess: () => void
 }
 
-type OfficeCommune = {
+type EcotrackCommune = {
   name: string
   code_postal: string | null
   has_stop_desk: boolean
@@ -40,7 +40,11 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [orderId, setOrderId] = useState<string | null>(null)
   const [summaryOpen, setSummaryOpen] = useState(false)
-  const [officeCommunes, setOfficeCommunes] = useState<OfficeCommune[]>([])
+  const [homeCommunes, setHomeCommunes] = useState<EcotrackCommune[]>([])
+  const [loadingHomeCommunes, setLoadingHomeCommunes] = useState(false)
+  const [homeCommunesError, setHomeCommunesError] = useState<string | null>(null)
+  const [homeCommunesLoadedForWilaya, setHomeCommunesLoadedForWilaya] = useState<string | null>(null)
+  const [officeCommunes, setOfficeCommunes] = useState<EcotrackCommune[]>([])
   const [loadingOffices, setLoadingOffices] = useState(false)
   const [officeError, setOfficeError] = useState<string | null>(null)
   const [officesLoadedForWilaya, setOfficesLoadedForWilaya] = useState<string | null>(null)
@@ -56,6 +60,10 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
 
   const productsTotal = items.reduce((sum, item) => sum + (item.price ?? 0) * item.quantity, 0)
   const totalPrice = productsTotal + deliveryPrice
+  const fallbackHomeCommunes = useMemo(
+    () => getCommunesByWilaya(formData.wilaya),
+    [formData.wilaya]
+  )
 
   useEffect(() => {
     if (!formData.wilaya || formData.delivery_type !== 'office') {
@@ -92,6 +100,49 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
     return () => controller.abort()
   }, [formData.delivery_type, formData.wilaya])
 
+  useEffect(() => {
+    if (!formData.wilaya || formData.delivery_type !== 'home') {
+      setHomeCommunes([])
+      setHomeCommunesError(null)
+      setLoadingHomeCommunes(false)
+      setHomeCommunesLoadedForWilaya(null)
+      return
+    }
+
+    const controller = new AbortController()
+    setLoadingHomeCommunes(true)
+    setHomeCommunesError(null)
+    setHomeCommunes([])
+    setHomeCommunesLoadedForWilaya(null)
+
+    fetch(`/api/ecotrack/communes?wilaya_id=${Number(formData.wilaya)}`, {
+      signal: controller.signal,
+    })
+      .then(async res => {
+        const data = await res.json()
+        if (!res.ok || !data.success) throw new Error(data.error || 'تعذّر جلب البلديات')
+        setHomeCommunes(Array.isArray(data.communes) ? data.communes : [])
+        setHomeCommunesLoadedForWilaya(formData.wilaya)
+      })
+      .catch(err => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setHomeCommunesError(err instanceof Error ? err.message : 'تعذّر جلب البلديات')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingHomeCommunes(false)
+      })
+
+    return () => controller.abort()
+  }, [formData.delivery_type, formData.wilaya])
+
+  const homeCommunesLoaded = homeCommunesLoadedForWilaya === formData.wilaya
+  const homeCommuneOptions = homeCommunesLoaded && homeCommunes.length > 0
+    ? homeCommunes.map(commune => commune.name)
+    : fallbackHomeCommunes
+  const homeCommunesUnavailable = formData.delivery_type === 'home'
+    && !!formData.wilaya
+    && homeCommuneOptions.length === 0
+    && (loadingHomeCommunes || !!homeCommunesError || homeCommunesLoaded)
   const officesLoaded = officesLoadedForWilaya === formData.wilaya
   const officesPending = formData.delivery_type === 'office' && !!formData.wilaya && !officesLoaded && !officeError
 
@@ -313,13 +364,27 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
           <select
             value={formData.commune}
             onChange={e => setFormData(d => ({ ...d, commune: e.target.value }))}
-            className="w-full bg-white border border-border rounded-xl px-4 py-3 text-sm text-brand focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 text-right"
+            disabled={loadingHomeCommunes && homeCommuneOptions.length === 0}
+            className="w-full bg-white border border-border rounded-xl px-4 py-3 text-sm text-brand focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 text-right disabled:bg-surface disabled:text-muted"
           >
-            <option value="">اختاري البلدية</option>
-            {getCommunesByWilaya(formData.wilaya).map(commune => (
+            <option value="">
+              {loadingHomeCommunes && homeCommuneOptions.length === 0 ? 'جارٍ تحميل البلديات...' : 'اختاري البلدية'}
+            </option>
+            {homeCommuneOptions.map(commune => (
               <option key={commune} value={commune}>{commune}</option>
             ))}
           </select>
+          {homeCommunesError && fallbackHomeCommunes.length > 0 && (
+            <p className="text-xs text-amber-700 mt-1 text-right">
+              تعذّر جلب بلديات شركة التوصيل، تم استخدام القائمة الاحتياطية.
+            </p>
+          )}
+          {homeCommunesError && fallbackHomeCommunes.length === 0 && (
+            <p className="text-xs text-red-500 mt-1 text-right">{homeCommunesError}</p>
+          )}
+          {homeCommunesLoaded && !loadingHomeCommunes && !homeCommunesError && homeCommuneOptions.length === 0 && (
+            <p className="text-xs text-red-500 mt-1 text-right">لا توجد بلديات متاحة لهذه الولاية حالياً</p>
+          )}
           {errors.commune && (
             <p className="text-xs text-red-500 mt-1 text-right">{errors.commune}</p>
           )}
@@ -427,7 +492,11 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
         fullWidth
         size="lg"
         loading={submitting}
-        disabled={submitting || (formData.delivery_type === 'office' && (loadingOffices || officesPending || !!officeError))}
+        disabled={
+          submitting
+          || (formData.delivery_type === 'office' && (loadingOffices || officesPending || !!officeError))
+          || homeCommunesUnavailable
+        }
       >
         {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
       </Button>
