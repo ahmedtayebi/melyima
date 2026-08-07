@@ -63,7 +63,9 @@ function normalizeStockValue(value: string) {
 
 function flattenInventory(products: Product[]): InventoryCombination[] {
   return products.flatMap(product => {
-    const colors = product.product_colors ?? []
+    const colors = product.product_colors
+      ?.slice()
+      .sort((a, b) => a.sort_order - b.sort_order) ?? []
     const sizes = sortSizes(product.product_sizes ?? [])
     if (colors.length === 0 || sizes.length === 0) return []
 
@@ -328,7 +330,9 @@ function ProductInventoryCard({
   onDraftChange: (key: string, value: string) => void
   onSaveCell: (productId: string, colorId: string, sizeId: string) => void
 }) {
-  const colors = product.product_colors ?? []
+  const colors = product.product_colors
+    ?.slice()
+    .sort((a, b) => a.sort_order - b.sort_order) ?? []
   const sizes = sortSizes(product.product_sizes ?? [])
   const firstImage = colors.find(color => color.image_url)?.image_url ?? null
 

@@ -80,7 +80,9 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
   }
 
   const getFirstImage = (product: Product) => {
-    const colors = product.product_colors ?? []
+    const colors = product.product_colors
+      ?.slice()
+      .sort((a, b) => a.sort_order - b.sort_order) ?? []
     const first = colors.find(c => c.image_url)
     return first?.image_url ?? null
   }

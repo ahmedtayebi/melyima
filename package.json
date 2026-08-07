@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "migrate:cloudinary": "node scripts/migrate-supabase-images-to-cloudinary.mjs",
     "lint": "eslint"
   },
   "dependencies": {

@@ -36,6 +36,7 @@ export interface ProductColor {
   hex_code: string
   image_url: string | null
   is_visible: boolean
+  sort_order: number
   images?: ProductColorImage[]
 }
 

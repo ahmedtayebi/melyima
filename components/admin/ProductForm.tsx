@@ -26,6 +26,7 @@ interface ColorEntry {
   hex_code: string
   image_url: string | null   // backward compat — set to first image URL on save
   is_visible: boolean
+  sort_order: number
   toDelete?: boolean
   images: ImageEntry[]
 }
@@ -53,6 +54,16 @@ function stockKey(colorId: string, sizeId: string) {
   return `${colorId}:${sizeId}`
 }
 
+function normalizeColorSort(colors: ColorEntry[]) {
+  let nextSortOrder = 0
+  return colors.map(color => {
+    if (color.toDelete) return color
+    const sortedColor = { ...color, sort_order: nextSortOrder }
+    nextSortOrder += 1
+    return sortedColor
+  })
+}
+
 async function uploadProductImage(file: File, productId: string, colorId: string) {
   const formData = new FormData()
   formData.set('file', file)
@@ -74,13 +85,16 @@ async function uploadProductImage(file: File, productId: string, colorId: string
 
 function buildInitialColors(product?: Product): ColorEntry[] {
   if (!product?.product_colors?.length) return []
-  return product.product_colors.map(c => ({
+  return [...product.product_colors]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(c => ({
     id: c.id,
     isNew: false,
     name: c.name,
     hex_code: c.hex_code,
     image_url: c.image_url,
     is_visible: c.is_visible,
+    sort_order: c.sort_order ?? 0,
     images: (c.images ?? []).map(img => ({
       id: img.id,
       preview: img.image_url,
@@ -180,6 +194,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       hex_code: '#000000',
       image_url: null,
       is_visible: true,
+      sort_order: prev.filter(c => !c.toDelete).length,
       images: [],
     }])
   }
@@ -349,7 +364,8 @@ export default function ProductForm({ productId, initialData, categories = [] }:
 
       // 2. Process colors
       const activeColorIds: { sourceId: string; actualId: string }[] = []
-      for (const color of colors) {
+      const colorsToSave = normalizeColorSort(colors)
+      for (const color of colorsToSave) {
         if (color.toDelete) {
           // Delete all color images first
           await supabase.from('product_color_images').delete().eq('color_id', color.id)
@@ -369,6 +385,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
               hex_code: color.hex_code,
               image_url: null,
               is_visible: color.is_visible,
+              sort_order: color.sort_order,
             })
             .select('id')
             .single()
@@ -381,6 +398,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
               name: color.name.trim(),
               hex_code: color.hex_code,
               is_visible: color.is_visible,
+              sort_order: color.sort_order,
             })
             .eq('id', color.id)
           if (updateError) throw new Error(updateError.message)

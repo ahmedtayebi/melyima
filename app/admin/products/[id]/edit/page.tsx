@@ -16,7 +16,7 @@ export default async function EditProductPage({ params }: Props) {
       .from('products')
       .select(
         `id, name, price, original_price, description, is_visible, category_id, created_at, updated_at,
-         product_colors(id, product_id, name, hex_code, image_url, is_visible,
+         product_colors(id, product_id, name, hex_code, image_url, is_visible, sort_order,
            product_color_images(id, color_id, image_url, sort_order)),
          product_sizes(id, product_id, label, is_visible, sort_order)`
       )
@@ -33,10 +33,12 @@ export default async function EditProductPage({ params }: Props) {
   const product: Product = {
     ...(data as any),
     description: (data as any).description ?? null,
-    product_colors: ((data as any).product_colors ?? []).map((c: any) => ({
-      ...c,
-      images: (c.product_color_images ?? []).sort((a: any, b: any) => a.sort_order - b.sort_order),
-    })),
+    product_colors: ((data as any).product_colors ?? [])
+      .sort((a: any, b: any) => a.sort_order - b.sort_order)
+      .map((c: any) => ({
+        ...c,
+        images: (c.product_color_images ?? []).sort((a: any, b: any) => a.sort_order - b.sort_order),
+      })),
     product_sizes: ((data as any).product_sizes ?? []).sort((a: any, b: any) => a.sort_order - b.sort_order),
   }
 

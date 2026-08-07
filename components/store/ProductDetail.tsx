@@ -18,7 +18,10 @@ export default function ProductDetail({
   storePolicy: string
   productVariants?: ProductVariant[]
 }) {
-  const visibleColors = product.product_colors?.filter(c => c.is_visible) ?? []
+  const visibleColors = product.product_colors
+    ?.slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .filter(c => c.is_visible) ?? []
   const visibleSizes = product.product_sizes?.filter(s => s.is_visible)
     .filter((s, i, arr) => arr.findIndex(t => t.label === s.label) === i) ?? []
 
