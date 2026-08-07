@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
 
     const { data: order } = await supabase
       .from('orders')
-      .select('*, order_items(product_name, quantity)')
+      .select('*, order_items(product_name, color_name, size_label, quantity)')
       .eq('id', order_id)
       .single()
 
@@ -32,7 +32,9 @@ export async function POST(req: NextRequest) {
     if (!code_wilaya) return NextResponse.json({ success: false, error: `Wilaya not found: ${order.wilaya}` }, { status: 400 })
 
     const produit = (order.order_items ?? [])
-      .map((i: { product_name: string; quantity: number }) => `${i.product_name} x${i.quantity}`)
+      .map((i: { product_name: string; color_name: string; size_label: string; quantity: number }) =>
+        `${i.product_name} - ${i.color_name} - ${i.size_label} x${i.quantity}`
+      )
       .join(', ')
       .substring(0, 255)
     const fallbackCommune = order.commune ?? order.wilaya_name ?? order.wilaya
