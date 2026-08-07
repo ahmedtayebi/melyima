@@ -53,6 +53,25 @@ function stockKey(colorId: string, sizeId: string) {
   return `${colorId}:${sizeId}`
 }
 
+async function uploadProductImage(file: File, productId: string, colorId: string) {
+  const formData = new FormData()
+  formData.set('file', file)
+  formData.set('product_id', productId)
+  formData.set('color_id', colorId)
+
+  const res = await fetch('/api/admin/cloudinary/upload', {
+    method: 'POST',
+    body: formData,
+  })
+  const result = await res.json()
+
+  if (!res.ok || !result.success || typeof result.url !== 'string') {
+    throw new Error(result.error || 'تعذّر رفع الصورة')
+  }
+
+  return result.url as string
+}
+
 function buildInitialColors(product?: Product): ColorEntry[] {
   if (!product?.product_colors?.length) return []
   return product.product_colors.map(c => ({
@@ -389,22 +408,13 @@ export default function ProductForm({ productId, initialData, categories = [] }:
             }
             finalUrls.push({ url: img.preview, sort_order: img.sort_order })
           } else if (img.file) {
-            const timestamp = Date.now() + Math.random()
-            const path = `${productId}/${actualColorId}/${timestamp}.webp`
-            const { error: uploadError } = await supabase.storage
-              .from('product-images')
-              .upload(path, img.file, { upsert: true, contentType: 'image/webp' })
-            if (!uploadError) {
-              const { data: { publicUrl } } = supabase.storage
-                .from('product-images')
-                .getPublicUrl(path)
-              await supabase.from('product_color_images').insert({
-                color_id: actualColorId,
-                image_url: publicUrl,
-                sort_order: img.sort_order,
-              })
-              finalUrls.push({ url: publicUrl, sort_order: img.sort_order })
-            }
+            const imageUrl = await uploadProductImage(img.file, productId, actualColorId)
+            await supabase.from('product_color_images').insert({
+              color_id: actualColorId,
+              image_url: imageUrl,
+              sort_order: img.sort_order,
+            })
+            finalUrls.push({ url: imageUrl, sort_order: img.sort_order })
           }
         }
 

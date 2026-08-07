@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseOrigin = supabaseUrl ? new URL(supabaseUrl).origin : ''
 const supabaseWsOrigin = supabaseOrigin.replace(/^https:/, 'wss:')
+const cloudinaryOrigin = 'https://res.cloudinary.com'
 const isDev = process.env.NODE_ENV === 'development'
 
 const contentSecurityPolicy = [
@@ -14,8 +15,8 @@ const contentSecurityPolicy = [
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
-  `img-src 'self' data: blob:${supabaseOrigin ? ` ${supabaseOrigin}` : ''}`,
-  `media-src 'self'${supabaseOrigin ? ` ${supabaseOrigin}` : ''}`,
+  `img-src 'self' data: blob:${supabaseOrigin ? ` ${supabaseOrigin}` : ''} ${cloudinaryOrigin}`,
+  `media-src 'self'${supabaseOrigin ? ` ${supabaseOrigin}` : ''} ${cloudinaryOrigin}`,
   `connect-src 'self'${supabaseOrigin ? ` ${supabaseOrigin} ${supabaseWsOrigin}` : ''}`,
   "upgrade-insecure-requests",
 ].join('; ')
@@ -27,6 +28,11 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'quthqddlpniiwpzlagmq.supabase.co',
         pathname: '/storage/v1/object/public/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'res.cloudinary.com',
+        pathname: '/**',
       },
     ],
   },
