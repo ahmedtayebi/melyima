@@ -215,7 +215,7 @@ export default function OrdersClient({ initialOrders }: Props) {
 
   const deleteOrder = (order: Order) => {
     setConfirmDialog({
-      message: `حذف طلب ${order.customer_name} نهائياً من لوحة التحكم؟ لا يمكن التراجع عن هذا الإجراء.`,
+      message: `حذف طلب ${order.customer_name} نهائياً؟ سيتم حذف البوليصة من شركة التوصيل إن وجدت، ثم حذف الطلب وإرجاع المخزون.`,
       onConfirm: async () => {
         setConfirmDialog(null)
         setLoading(order.id, 'delete-order', true)
@@ -229,7 +229,7 @@ export default function OrdersClient({ initialOrders }: Props) {
           if (data.success) {
             setOrders(prev => prev.filter(item => item.id !== order.id))
             if (expandedId === order.id) setExpandedId(null)
-            showToast('تم حذف الطلب وإرجاع المخزون', 'success')
+            showToast('تم حذف الطلب والبوليصة وإرجاع المخزون', 'success')
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
           }
