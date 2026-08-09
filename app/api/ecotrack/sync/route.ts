@@ -65,7 +65,9 @@ async function fetchAllPages(url: string): Promise<EcotrackOrder[]> {
 function isAuthorizedCron(req: Request) {
   const cronSecret = process.env.CRON_SECRET
   if (!cronSecret) return false
-  return req.headers.get('authorization') === `Bearer ${cronSecret}`
+  const url = new URL(req.url)
+  return req.headers.get('authorization') === `Bearer ${cronSecret}` ||
+    url.searchParams.get('secret') === cronSecret
 }
 
 async function syncEcotrackOrders() {
