@@ -75,10 +75,26 @@ export default function OrdersClient({ initialOrders }: Props) {
       }
     }
 
-    const interval = window.setInterval(refreshOrders, 30_000)
-    const handleFocus = () => { void refreshOrders() }
+    const syncThenRefresh = async () => {
+      if (document.hidden || confirmDialog || editingOrder) return
+      if (Object.values(ecotrackLoading).some(Boolean)) return
+
+      try {
+        await fetch('/api/ecotrack/sync', { method: 'POST' })
+      } catch {
+        // The following refresh still helps if another scheduler already synced.
+      }
+
+      await refreshOrders()
+    }
+
+    void syncThenRefresh()
+
+    const refreshInterval = window.setInterval(refreshOrders, 30_000)
+    const syncInterval = window.setInterval(syncThenRefresh, 120_000)
+    const handleFocus = () => { void syncThenRefresh() }
     const handleVisibilityChange = () => {
-      if (!document.hidden) void refreshOrders()
+      if (!document.hidden) void syncThenRefresh()
     }
 
     window.addEventListener('focus', handleFocus)
@@ -86,7 +102,8 @@ export default function OrdersClient({ initialOrders }: Props) {
 
     return () => {
       ignore = true
-      window.clearInterval(interval)
+      window.clearInterval(refreshInterval)
+      window.clearInterval(syncInterval)
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
