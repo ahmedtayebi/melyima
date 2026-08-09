@@ -57,6 +57,41 @@ export default function OrdersClient({ initialOrders }: Props) {
     return () => window.removeEventListener('keydown', handleKey)
   }, [confirmDialog])
 
+  useEffect(() => {
+    let ignore = false
+
+    const refreshOrders = async () => {
+      if (document.hidden || confirmDialog || editingOrder) return
+      if (Object.values(ecotrackLoading).some(Boolean)) return
+
+      try {
+        const res = await fetch('/api/admin/orders', { cache: 'no-store' })
+        const data = await res.json()
+        if (!ignore && res.ok && data.success && Array.isArray(data.orders)) {
+          setOrders(data.orders)
+        }
+      } catch {
+        // Silent refresh keeps the page calm; manual actions still show errors.
+      }
+    }
+
+    const interval = window.setInterval(refreshOrders, 30_000)
+    const handleFocus = () => { void refreshOrders() }
+    const handleVisibilityChange = () => {
+      if (!document.hidden) void refreshOrders()
+    }
+
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      ignore = true
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [confirmDialog, editingOrder, ecotrackLoading])
+
   // ── Stats ─────────────────────────────────────────────────
   const stats = useMemo(() => ({
     all:       orders.length,
