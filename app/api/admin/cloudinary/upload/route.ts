@@ -3,9 +3,14 @@ import { NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 
 export const runtime = 'nodejs'
-export const maxDuration = 30
+export const maxDuration = 60
 
-const MAX_IMAGE_SIZE = 8 * 1024 * 1024
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+
+function formatFileSize(bytes: number) {
+  const mb = bytes / (1024 * 1024)
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)}MB`
+}
 
 function signCloudinaryParams(params: Record<string, string>, apiSecret: string) {
   const payload = Object.entries(params)
@@ -37,7 +42,16 @@ export async function POST(req: Request) {
       )
     }
 
-    const incoming = await req.formData()
+    let incoming: FormData
+    try {
+      incoming = await req.formData()
+    } catch (err) {
+      console.error('Invalid upload form data:', err)
+      return NextResponse.json(
+        { success: false, error: 'تعذّر قراءة الصورة، جرّب صورة أصغر أو أعد المحاولة' },
+        { status: 400 }
+      )
+    }
     const file = incoming.get('file')
     const productId = String(incoming.get('product_id') ?? '').trim()
     const colorId = String(incoming.get('color_id') ?? '').trim()
@@ -58,7 +72,7 @@ export async function POST(req: Request) {
 
     if (file.size > MAX_IMAGE_SIZE) {
       return NextResponse.json(
-        { success: false, error: 'حجم الصورة كبير جداً، الحد الأقصى 8MB' },
+        { success: false, error: `حجم الصورة كبير جداً، الحد الأقصى ${formatFileSize(MAX_IMAGE_SIZE)}` },
         { status: 400 }
       )
     }

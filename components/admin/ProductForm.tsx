@@ -46,6 +46,11 @@ const SIZE_PRESETS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+const CLIENT_MAX_IMAGE_SIZE = 20 * 1024 * 1024
+const TARGET_UPLOAD_IMAGE_SIZE = 4 * 1024 * 1024
+const MAX_UPLOAD_IMAGE_SIDE = 1600
+const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58]
+
 function tempId() {
   return `new_${Math.random().toString(36).slice(2)}`
 }
@@ -64,6 +69,101 @@ function normalizeColorSort(colors: ColorEntry[]) {
   })
 }
 
+function formatFileSize(bytes: number) {
+  const mb = bytes / (1024 * 1024)
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)}MB`
+}
+
+function jpegFileName(name: string) {
+  const base = name.replace(/\.[^.]+$/, '') || 'image'
+  return `${base}.jpg`
+}
+
+function isCanvasSafeImage(file: File) {
+  return file.type !== 'image/gif' && file.type !== 'image/svg+xml'
+}
+
+function loadImage(file: File) {
+  return new Promise<{ image: HTMLImageElement; url: string }>((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => resolve({ image, url })
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('تعذّر قراءة الصورة'))
+    }
+    image.src = url
+  })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error('تعذّر تجهيز الصورة')),
+      'image/jpeg',
+      quality
+    )
+  })
+}
+
+async function prepareImageForUpload(file: File) {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('الملف يجب أن يكون صورة')
+  }
+
+  if (file.size > CLIENT_MAX_IMAGE_SIZE) {
+    throw new Error(`حجم الصورة كبير جداً (${formatFileSize(file.size)}). الحد الأقصى ${formatFileSize(CLIENT_MAX_IMAGE_SIZE)}`)
+  }
+
+  if (!isCanvasSafeImage(file)) return file
+
+  let loaded: { image: HTMLImageElement; url: string }
+  try {
+    loaded = await loadImage(file)
+  } catch {
+    return file
+  }
+
+  const { image, url } = loaded
+  try {
+    const sourceWidth = image.naturalWidth || image.width
+    const sourceHeight = image.naturalHeight || image.height
+    if (!sourceWidth || !sourceHeight) return file
+
+    const scale = Math.min(1, MAX_UPLOAD_IMAGE_SIDE / Math.max(sourceWidth, sourceHeight))
+    if (scale === 1 && file.size <= TARGET_UPLOAD_IMAGE_SIZE && file.type === 'image/jpeg') {
+      return file
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale))
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale))
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+    let bestBlob: Blob | null = null
+    for (const quality of JPEG_QUALITIES) {
+      const blob = await canvasToBlob(canvas, quality)
+      if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob
+      if (blob.size <= TARGET_UPLOAD_IMAGE_SIZE) break
+    }
+
+    if (!bestBlob || bestBlob.size >= file.size) return file
+
+    return new File([bestBlob], jpegFileName(file.name), {
+      type: 'image/jpeg',
+      lastModified: Date.now(),
+    })
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 async function uploadProductImage(file: File, productId: string, colorId: string) {
   const formData = new FormData()
   formData.set('file', file)
@@ -74,7 +174,12 @@ async function uploadProductImage(file: File, productId: string, colorId: string
     method: 'POST',
     body: formData,
   })
-  const result = await res.json()
+  let result: { success?: boolean; url?: string; error?: string }
+  try {
+    result = await res.json()
+  } catch {
+    throw new Error(res.status === 413 ? 'حجم الصورة كبير جداً' : 'تعذّر رفع الصورة')
+  }
 
   if (!res.ok || !result.success || typeof result.url !== 'string') {
     throw new Error(result.error || 'تعذّر رفع الصورة')
@@ -152,6 +257,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   const [sizes, setSizes] = useState<SizeEntry[]>(buildInitialSizes(initialData))
   const [customSize, setCustomSize] = useState('')
   const [saving, setSaving] = useState(false)
+  const [preparingImages, setPreparingImages] = useState(false)
   const [error, setError] = useState('')
   const [variantStocks, setVariantStocks] = useState<Record<string, string>>({})
   const [variantStockTouched, setVariantStockTouched] = useState(false)
@@ -209,18 +315,30 @@ export default function ProductForm({ productId, initialData, categories = [] }:
     ).filter(Boolean))
   }
 
-  const addImagesToColor = useCallback((colorId: string, files: FileList) => {
-    setColors(prev => prev.map(c => {
-      if (c.id !== colorId) return c
-      const existingActive = c.images.filter(i => !i.toDelete)
-      const newImages: ImageEntry[] = Array.from(files).map((file, i) => ({
-        file,
-        preview: URL.createObjectURL(file),
-        existing: false,
-        sort_order: existingActive.length + i,
+  const addImagesToColor = useCallback(async (colorId: string, files: FileList) => {
+    setError('')
+    setPreparingImages(true)
+    try {
+      const preparedFiles = await Promise.all(
+        Array.from(files).map(file => prepareImageForUpload(file))
+      )
+
+      setColors(prev => prev.map(c => {
+        if (c.id !== colorId) return c
+        const existingActive = c.images.filter(i => !i.toDelete)
+        const newImages: ImageEntry[] = preparedFiles.map((file, i) => ({
+          file,
+          preview: URL.createObjectURL(file),
+          existing: false,
+          sort_order: existingActive.length + i,
+        }))
+        return { ...c, images: [...c.images, ...newImages] }
       }))
-      return { ...c, images: [...c.images, ...newImages] }
-    }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذّر تجهيز الصور')
+    } finally {
+      setPreparingImages(false)
+    }
   }, [])
 
   const removeImageFromColor = useCallback((colorId: string, imgIdx: number) => {
@@ -526,6 +644,12 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm font-body rounded-xl px-4 py-3">
           {error}
+        </div>
+      )}
+
+      {preparingImages && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm font-body rounded-xl px-4 py-3">
+          جاري تجهيز الصور للرفع...
         </div>
       )}
 
@@ -858,7 +982,7 @@ interface ColorRowProps {
   color: ColorEntry
   onChange: (patch: Partial<ColorEntry>) => void
   onRemove: () => void
-  onAddImages: (files: FileList) => void
+  onAddImages: (files: FileList) => void | Promise<void>
   onRemoveImage: (idx: number) => void
   onReorderImage: (fromIdx: number, toIdx: number) => void
 }
@@ -958,7 +1082,10 @@ function ColorRow({ color, onChange, onRemove, onAddImages, onRemoveImage, onReo
               accept="image/*"
               multiple
               className="sr-only"
-              onChange={e => { if (e.target.files?.length) onAddImages(e.target.files) }}
+              onChange={e => {
+                if (e.currentTarget.files?.length) void onAddImages(e.currentTarget.files)
+                e.currentTarget.value = ''
+              }}
             />
           </label>
         </div>
