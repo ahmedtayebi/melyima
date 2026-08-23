@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, X, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
@@ -25,6 +25,7 @@ const FILTER_TABS: { key: FilterType; label: string }[] = [
 ]
 
 const PER_PAGE = 20
+const ADMIN_ORDERS_REFRESH_MS = 120_000
 
 interface Props { initialOrders: Order[] }
 
@@ -44,6 +45,8 @@ export default function OrdersClient({ initialOrders }: Props) {
     onConfirm: () => void;
   } | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const lastRefreshAt = useRef(0)
+  const ecotrackLoadingRef = useRef(ecotrackLoading)
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
@@ -58,11 +61,19 @@ export default function OrdersClient({ initialOrders }: Props) {
   }, [confirmDialog])
 
   useEffect(() => {
+    ecotrackLoadingRef.current = ecotrackLoading
+  }, [ecotrackLoading])
+
+  useEffect(() => {
     let ignore = false
 
-    const refreshOrders = async () => {
+    const refreshOrders = async (force = false) => {
       if (document.hidden || confirmDialog || editingOrder) return
-      if (Object.values(ecotrackLoading).some(Boolean)) return
+      if (Object.values(ecotrackLoadingRef.current).some(Boolean)) return
+
+      const now = Date.now()
+      if (!force && now - lastRefreshAt.current < ADMIN_ORDERS_REFRESH_MS) return
+      lastRefreshAt.current = now
 
       try {
         const res = await fetch('/api/admin/orders', { cache: 'no-store' })
@@ -75,26 +86,12 @@ export default function OrdersClient({ initialOrders }: Props) {
       }
     }
 
-    const syncThenRefresh = async () => {
-      if (document.hidden || confirmDialog || editingOrder) return
-      if (Object.values(ecotrackLoading).some(Boolean)) return
+    void refreshOrders(true)
 
-      try {
-        await fetch('/api/ecotrack/sync', { method: 'POST' })
-      } catch {
-        // The following refresh still helps if another scheduler already synced.
-      }
-
-      await refreshOrders()
-    }
-
-    void syncThenRefresh()
-
-    const refreshInterval = window.setInterval(refreshOrders, 30_000)
-    const syncInterval = window.setInterval(syncThenRefresh, 120_000)
-    const handleFocus = () => { void syncThenRefresh() }
+    const refreshInterval = window.setInterval(() => { void refreshOrders() }, ADMIN_ORDERS_REFRESH_MS)
+    const handleFocus = () => { void refreshOrders() }
     const handleVisibilityChange = () => {
-      if (!document.hidden) void syncThenRefresh()
+      if (!document.hidden) void refreshOrders()
     }
 
     window.addEventListener('focus', handleFocus)
@@ -103,11 +100,10 @@ export default function OrdersClient({ initialOrders }: Props) {
     return () => {
       ignore = true
       window.clearInterval(refreshInterval)
-      window.clearInterval(syncInterval)
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [confirmDialog, editingOrder, ecotrackLoading])
+  }, [confirmDialog, editingOrder])
 
   // ── Stats ─────────────────────────────────────────────────
   const stats = useMemo(() => ({

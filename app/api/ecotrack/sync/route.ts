@@ -5,6 +5,8 @@ import { requireAdmin } from '../_auth'
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
 const PER_PAGE = 40
+const SYNC_COOLDOWN_SECONDS = 10 * 60
+const SYNC_COOLDOWN_KEY = 'ecotrack_sync'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -24,6 +26,56 @@ type EcotrackOrder = {
   montant: string | number
   adresse?: string | null
   created_at?: string | null
+}
+
+type JobLockResult = {
+  allowed: boolean
+  retry_after: number
+}
+
+function createServiceClient() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!serviceRoleKey) return null
+
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    serviceRoleKey,
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    }
+  )
+}
+
+async function reserveSyncWindow(
+  supabase: NonNullable<ReturnType<typeof createServiceClient>>,
+  force: boolean
+) {
+  if (force) return { allowed: true, skipped: false, retryAfter: 0 }
+
+  try {
+    const { data, error } = await supabase
+      .rpc('try_reserve_job_lock', {
+        p_key: SYNC_COOLDOWN_KEY,
+        p_cooldown_seconds: SYNC_COOLDOWN_SECONDS,
+        p_force: false,
+      })
+      .single()
+
+    if (error) throw error
+    const result = data as JobLockResult | null
+    if (result?.allowed) return { allowed: true, skipped: false, retryAfter: 0 }
+    return {
+      allowed: false,
+      skipped: true,
+      retryAfter: Math.max(1, Number(result?.retry_after) || SYNC_COOLDOWN_SECONDS),
+    }
+  } catch (err) {
+    console.error('Ecotrack sync DB cooldown error:', err)
+    return { allowed: false, skipped: true, retryAfter: SYNC_COOLDOWN_SECONDS }
+  }
 }
 
 function mapStatus(ecotrackStatus: string): { status: 'delivered' | 'cancelled' | 'confirmed'; ecotrack_status: 'draft' | 'shipped' } {
@@ -143,18 +195,10 @@ function isAuthorizedCron(req: Request) {
     url.searchParams.get('secret') === cronSecret
 }
 
-async function syncEcotrackOrders() {
+async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof createServiceClient>>) {
   if (!BASE_URL || !TOKEN) {
     return NextResponse.json(
       { success: false, error: 'Ecotrack config missing' },
-      { status: 500 }
-    )
-  }
-
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) {
-    return NextResponse.json(
-      { success: false, error: 'Supabase service role missing' },
       { status: 500 }
     )
   }
@@ -167,17 +211,6 @@ async function syncEcotrackOrders() {
   if (allOrders.length === 0) {
     return NextResponse.json({ success: true, updated: 0, imported: 0, total: 0 })
   }
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceRoleKey,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    }
-  )
 
   const trackingNumbers = allOrders.map(o => o.tracking).filter(Boolean)
   const { data: dbOrders, error: dbQueryError } = await supabase
@@ -271,7 +304,26 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
-    return await syncEcotrackOrders()
+    const supabase = createServiceClient()
+    if (!supabase) {
+      return NextResponse.json(
+        { success: false, error: 'Supabase service role missing' },
+        { status: 500 }
+      )
+    }
+
+    const url = new URL(req.url)
+    const window = await reserveSyncWindow(supabase, url.searchParams.get('force') === '1')
+    if (!window.allowed) {
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: 'sync_cooldown',
+        retry_after: window.retryAfter,
+      })
+    }
+
+    return await syncEcotrackOrders(supabase)
   } catch (err) {
     console.error('Ecotrack cron sync error:', err)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })
@@ -282,7 +334,26 @@ export async function POST() {
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
-    return await syncEcotrackOrders()
+
+    const supabase = createServiceClient()
+    if (!supabase) {
+      return NextResponse.json(
+        { success: false, error: 'Supabase service role missing' },
+        { status: 500 }
+      )
+    }
+
+    const window = await reserveSyncWindow(supabase, false)
+    if (!window.allowed) {
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: 'sync_cooldown',
+        retry_after: window.retryAfter,
+      })
+    }
+
+    return await syncEcotrackOrders(supabase)
   } catch (err) {
     console.error('Ecotrack sync error:', err)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })
