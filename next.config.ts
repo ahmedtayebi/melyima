@@ -36,6 +36,15 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  async redirects() {
+    return [
+      {
+        source: '/opengraph-image',
+        destination: '/og-image.jpg',
+        permanent: true,
+      },
+    ]
+  },
   async headers() {
     return [
       {
