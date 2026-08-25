@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import { createClient } from '@/lib/supabase/server'
 import { createStaticClient } from '@/lib/supabase/static'
 import { notFound } from 'next/navigation'
 import ProductDetail from '@/components/store/ProductDetail'
@@ -24,7 +23,7 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const { data } = await supabase
     .from('products')
@@ -72,7 +71,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ProductPage({ params }: Props) {
   const { id } = await params
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const [{ data }, { data: settingsData }, { data: variantsData }] = await Promise.all([
     supabase

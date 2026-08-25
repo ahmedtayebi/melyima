@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import { createClient } from '@/lib/supabase/server'
 import { createStaticClient } from '@/lib/supabase/static'
 import { notFound } from 'next/navigation'
 import ProductCard from '@/components/store/ProductCard'
@@ -59,7 +58,7 @@ const mapProduct = (p: any): Product => ({
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const { data: category } = await supabase
     .from('categories')
@@ -89,7 +88,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function CategoryPage({ params }: Props) {
   const { id } = await params
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const [{ data: category }, { data: productsData }] = await Promise.all([
     supabase

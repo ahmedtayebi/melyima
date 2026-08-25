@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createStaticClient } from '@/lib/supabase/static'
 import ProductsSection from '@/components/store/ProductsSection'
 import BestSellersSection from '@/components/store/BestSellersSection'
 import ReviewsSection from '@/components/store/ReviewsSection'
@@ -6,6 +6,8 @@ import HeroSection from '@/components/store/HeroSection'
 import NewArrivalsSection from '@/components/store/NewArrivalsSection'
 import DiscountsSection from '@/components/store/DiscountsSection'
 import type { Product, Category, Review } from '@/lib/types'
+
+export const revalidate = 3600
 
 const PRODUCTS_SELECT = `
   id, name, price, original_price, description, is_visible, category_id, sales_count, created_at, updated_at,
@@ -43,7 +45,7 @@ const mapProduct = (p: any): Product => ({
 })
 
 export default async function StorePage() {
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const [
     { data: productsData },

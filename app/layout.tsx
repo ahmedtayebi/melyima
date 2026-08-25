@@ -52,9 +52,9 @@ export const metadata: Metadata = {
     description: 'اكتشفي أجمل تشكيلات العباءات النسائية العصرية من MELY•IMA — توصيل لجميع ولايات الجزائر.',
     images: [
       {
-        url: '/opengraph-image',
-        width: 1200,
-        height: 630,
+        url: '/og-image.jpg',
+        width: 792,
+        height: 792,
         alt: 'MELY•IMA — عباءات نسائية عصرية',
       },
     ],
@@ -64,7 +64,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'MELY•IMA — عباءات نسائية عصرية',
     description: 'اكتشفي أجمل تشكيلات العباءات النسائية العصرية من MELY•IMA',
-    images: ['/opengraph-image'],
+    images: ['/og-image.jpg'],
   },
 
   robots: {

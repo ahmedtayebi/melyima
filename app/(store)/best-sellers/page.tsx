@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { createClient } from '@/lib/supabase/server'
+import { createStaticClient } from '@/lib/supabase/static'
 import { TrendingUp } from 'lucide-react'
 
 export const metadata: Metadata = {
@@ -14,6 +14,8 @@ export const metadata: Metadata = {
 }
 import ProductCard from '@/components/store/ProductCard'
 import type { Product } from '@/lib/types'
+
+export const revalidate = 3600
 
 const PRODUCTS_SELECT = `
   id, name, price, original_price, description, is_visible, category_id, sales_count, created_at, updated_at,
@@ -51,7 +53,7 @@ const mapProduct = (p: any): Product => ({
 })
 
 export default async function BestSellersPage() {
-  const supabase = await createClient()
+  const supabase = createStaticClient()
   const { data } = await supabase
     .from('products')
     .select(PRODUCTS_SELECT)

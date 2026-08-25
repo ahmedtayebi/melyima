@@ -1,10 +1,12 @@
 import type { MetadataRoute } from 'next'
-import { createClient } from '@/lib/supabase/server'
+import { createStaticClient } from '@/lib/supabase/static'
 
 const BASE_URL = 'https://melyima.com'
 
+export const revalidate = 3600
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const supabase = await createClient()
+  const supabase = createStaticClient()
 
   const [{ data: products }, { data: categories }] = await Promise.all([
     supabase.from('products').select('id, updated_at').eq('is_visible', true),
