@@ -204,35 +204,6 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     })
   }
 
-  const deleteFromEcotrack = (orderId: string, tracking: string) => {
-    setConfirmDialog({
-      message: 'حذف البوليصة من Ecotrack؟',
-      onConfirm: async () => {
-        setConfirmDialog(null)
-        setLoading(orderId, 'delete', true)
-        try {
-          const res = await fetch('/api/ecotrack/delete', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_id: orderId, tracking }),
-          })
-          const data = await res.json()
-          if (data.success) {
-            setOrders(prev => prev.map(o =>
-              o.id === orderId
-                ? { ...o, ecotrack_tracking: null, ecotrack_status: 'none' as const }
-                : o
-            ))
-          } else {
-            showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
-          }
-        } finally {
-          setLoading(orderId, 'delete', false)
-        }
-      },
-    })
-  }
-
   // ── Status update ─────────────────────────────────────────
   const updateStatus = async (orderId: string, status: OrderStatus) => {
     const currentOrder = orders.find(o => o.id === orderId)
@@ -423,7 +394,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
             </button>
           )}
 
-          {/* Draft — show tracking + ship + delete */}
+          {/* Draft — show tracking + ship */}
           {order.ecotrack_tracking && order.ecotrack_status === 'draft' && (
             <>
               <span className="text-xs font-body text-muted" dir="ltr">
@@ -439,16 +410,6 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                   ? <Loader2 size={12} className="animate-spin" />
                   : <Send size={12} />}
                 إرسال للشحن
-              </button>
-              <button
-                onClick={() => deleteFromEcotrack(order.id, order.ecotrack_tracking!)}
-                disabled={ecotrackLoading[`${order.id}-delete`]}
-                className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200"
-              >
-                {ecotrackLoading[`${order.id}-delete`]
-                  ? <Loader2 size={12} className="animate-spin" />
-                  : <Trash2 size={12} />}
-                حذف
               </button>
             </>
           )}
