@@ -16,6 +16,7 @@ type Period = '30d' | '90d' | 'all'
 type StatsOrder = {
   id:             Order['id']
   status:         Order['status']
+  ecotrack_status: Order['ecotrack_status']
   total_price:    Order['total_price']
   products_total: Order['products_total'] | null
   delivery_price: Order['delivery_price'] | null
@@ -32,12 +33,14 @@ const GOLD2  = '#D4A94C'
 const STATUS_COLORS: Record<string, string> = {
   delivered: '#10B981',
   confirmed: '#3B82F6',
+  shipping:  '#0891B2',
   pending:   '#F59E0B',
   cancelled: '#94A3B8',
 }
 const STATUS_LABELS: Record<string, string> = {
   pending:   'قيد الانتظار',
   confirmed: 'مؤكد',
+  shipping:  'قيد التوصيل',
   delivered: 'مُسلَّم',
   cancelled: 'ملغي',
 }
@@ -183,7 +186,12 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
 
   const statusData  = useMemo(() => {
     const counts: Record<string, number> = {}
-    filtered.forEach(o => { counts[o.status] = (counts[o.status] ?? 0) + 1 })
+    filtered.forEach(o => {
+      const status = o.status === 'confirmed' && o.ecotrack_status === 'shipped'
+        ? 'shipping'
+        : o.status
+      counts[status] = (counts[status] ?? 0) + 1
+    })
     return Object.entries(counts)
       .map(([status, value]) => ({ name: STATUS_LABELS[status] ?? status, value, status }))
       .sort((a, b) => b.value - a.value)

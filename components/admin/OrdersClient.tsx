@@ -9,19 +9,27 @@ import OrderEditForm from '@/components/admin/OrderEditForm'
 import type { Order, Product } from '@/lib/types'
 
 type OrderStatus = 'pending' | 'confirmed' | 'delivered' | 'cancelled'
-type FilterType = 'all' | 'deleted' | OrderStatus
+type DisplayOrderStatus = OrderStatus | 'shipping'
+type FilterType = 'all' | 'deleted' | DisplayOrderStatus
 
-const STATUS_CONFIG: Record<OrderStatus, { label: string; badge: string; select: string }> = {
+const STATUS_CONFIG: Record<DisplayOrderStatus, { label: string; badge: string; select: string }> = {
   pending:   { label: 'قيد الانتظار', badge: 'bg-amber-100 text-amber-800',  select: 'قيد الانتظار' },
   confirmed: { label: 'مؤكد',         badge: 'bg-blue-100 text-blue-800',    select: 'مؤكد' },
+  shipping:  { label: 'قيد التوصيل',  badge: 'bg-cyan-100 text-cyan-800',    select: 'قيد التوصيل' },
   delivered: { label: 'مُسلَّم',      badge: 'bg-green-100 text-green-800',  select: 'مُسلَّم' },
   cancelled: { label: 'ملغي',         badge: 'bg-red-100 text-red-800',      select: 'ملغي' },
+}
+
+function displayStatus(order: Order): DisplayOrderStatus {
+  if (order.status === 'confirmed' && order.ecotrack_status === 'shipped') return 'shipping'
+  return order.status
 }
 
 const FILTER_TABS: { key: FilterType; label: string }[] = [
   { key: 'all',       label: 'الكل' },
   { key: 'pending',   label: 'قيد الانتظار' },
   { key: 'confirmed', label: 'مؤكدة' },
+  { key: 'shipping',  label: 'قيد التوصيل' },
   { key: 'delivered', label: 'مُسلَّمة' },
   { key: 'cancelled', label: 'ملغاة' },
   { key: 'deleted',   label: 'المحذوفة' },
@@ -112,7 +120,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   const stats = useMemo(() => ({
     all:       orders.filter(o => !o.deleted_at).length,
     pending:   orders.filter(o => !o.deleted_at && o.status === 'pending').length,
-    confirmed: orders.filter(o => !o.deleted_at && o.status === 'confirmed').length,
+    confirmed: orders.filter(o => !o.deleted_at && displayStatus(o) === 'confirmed').length,
+    shipping:  orders.filter(o => !o.deleted_at && displayStatus(o) === 'shipping').length,
     delivered: orders.filter(o => !o.deleted_at && o.status === 'delivered').length,
     cancelled: orders.filter(o => !o.deleted_at && o.status === 'cancelled').length,
     deleted:   orders.filter(o => Boolean(o.deleted_at)).length,
@@ -123,7 +132,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     let r = filter === 'deleted'
       ? orders.filter(o => Boolean(o.deleted_at))
       : orders.filter(o => !o.deleted_at)
-    if (filter !== 'all' && filter !== 'deleted') r = r.filter(o => o.status === filter)
+    if (filter !== 'all' && filter !== 'deleted') r = r.filter(o => displayStatus(o) === filter)
     if (search.trim()) {
       const q = search.toLowerCase()
       r = r.filter(o =>
@@ -477,10 +486,11 @@ export default function OrdersClient({ initialOrders, products }: Props) {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {[
           { key: 'pending' as FilterType,   label: 'قيد الانتظار', count: stats.pending },
           { key: 'confirmed' as FilterType, label: 'مؤكدة',        count: stats.confirmed },
+          { key: 'shipping' as FilterType,  label: 'قيد التوصيل',  count: stats.shipping },
           { key: 'delivered' as FilterType, label: 'مُسلَّمة',     count: stats.delivered },
           { key: 'cancelled' as FilterType, label: 'ملغاة',        count: stats.cancelled },
         ].map(({ key, label, count }) => (
@@ -579,9 +589,9 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold font-heading',
                       order.deleted_at
                         ? 'bg-gray-200 text-gray-700'
-                        : STATUS_CONFIG[order.status as OrderStatus]?.badge ?? 'bg-gray-100 text-gray-700'
+                        : STATUS_CONFIG[displayStatus(order)]?.badge ?? 'bg-gray-100 text-gray-700'
                     )}>
-                      {order.deleted_at ? 'محذوف' : STATUS_CONFIG[order.status as OrderStatus]?.label ?? order.status}
+                      {order.deleted_at ? 'محذوف' : STATUS_CONFIG[displayStatus(order)]?.label ?? order.status}
                     </span>
                   </td>
                   <td className="px-4 py-3 font-body text-xs text-muted tabular-nums">
@@ -775,9 +785,9 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                 'px-2.5 py-1 rounded-full text-[11px] font-bold font-heading flex-shrink-0',
                 order.deleted_at
                   ? 'bg-gray-200 text-gray-700'
-                  : STATUS_CONFIG[order.status as OrderStatus]?.badge
+                  : STATUS_CONFIG[displayStatus(order)]?.badge
               )}>
-                {order.deleted_at ? 'محذوف' : STATUS_CONFIG[order.status as OrderStatus]?.label}
+                {order.deleted_at ? 'محذوف' : STATUS_CONFIG[displayStatus(order)]?.label}
               </span>
             </div>
             <div className="flex items-center gap-4 text-xs text-muted font-body">
