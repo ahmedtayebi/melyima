@@ -5,7 +5,7 @@ import { requireAdmin } from '../_auth'
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
 const PER_PAGE = 40
-const SYNC_COOLDOWN_SECONDS = 10 * 60
+const SYNC_COOLDOWN_SECONDS = 60 * 60
 const SYNC_COOLDOWN_KEY = 'ecotrack_sync'
 
 export const runtime = 'nodejs'

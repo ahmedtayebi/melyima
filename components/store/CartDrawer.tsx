@@ -118,6 +118,7 @@ export default function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
                               src={getImageUrl(item.color_image_url)!}
                               alt={item.product_name}
                               fill
+                              unoptimized
                               sizes="72px"
                               className="object-cover"
                             />

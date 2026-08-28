@@ -22,6 +22,7 @@ export default function ProductCard({ product }: { product: Product }) {
   const [selectedSizeId, setSelectedSizeId] = useState('')
   const [added, setAdded] = useState(false)
   const [imageHovered, setImageHovered] = useState(false)
+  const [newProductCutoff] = useState(() => Date.now() - 30 * 24 * 60 * 60 * 1000)
 
   const addItem = useCartStore((s) => s.addItem)
   const selectedColor = visibleColors.find(c => c.id === selectedColorId) ?? visibleColors[0]
@@ -52,7 +53,7 @@ export default function ProductCard({ product }: { product: Product }) {
 
   const isOnSale = hasDiscount(product.price, product.original_price)
   const discountPercent = getDiscountPercent(product.price, product.original_price)
-  const isNew = new Date(product.created_at) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  const isNew = new Date(product.created_at).getTime() > newProductCutoff
 
   return (
     <motion.div
@@ -84,6 +85,7 @@ export default function ProductCard({ product }: { product: Product }) {
               src={selectedColor.image_url}
               alt={product.name}
               fill
+              unoptimized
               className="object-cover"
               sizes="(max-width: 768px) 42vw, 280px"
             />

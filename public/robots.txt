@@ -3,5 +3,33 @@ Allow: /
 Disallow: /admin/
 Disallow: /api/
 Disallow: /_next/
+Crawl-delay: 10
+
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
 
 Sitemap: https://melyima.com/sitemap.xml

@@ -353,6 +353,7 @@ function ProductInventoryCard({
                   src={firstImage}
                   alt={product.name}
                   fill
+                  unoptimized
                   sizes="(max-width: 1024px) 80px, 256px"
                   className="object-cover"
                 />

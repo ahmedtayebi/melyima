@@ -25,7 +25,7 @@ const FILTER_TABS: { key: FilterType; label: string }[] = [
 ]
 
 const PER_PAGE = 20
-const ADMIN_ORDERS_REFRESH_MS = 120_000
+const ADMIN_ORDERS_REFRESH_MS = 300_000
 
 interface Props { initialOrders: Order[] }
 
