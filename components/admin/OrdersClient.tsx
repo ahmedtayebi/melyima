@@ -38,7 +38,7 @@ export default function OrdersClient({ initialOrders }: Props) {
   const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [editForm, setEditForm] = useState({
-    adresse: '', commune: '', tel: '', tel2: '', remarque: '',
+    adresse: '', commune: '', tel: '', tel2: '',
   })
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
@@ -121,7 +121,9 @@ export default function OrdersClient({ initialOrders }: Props) {
     if (search.trim()) {
       const q = search.toLowerCase()
       r = r.filter(o =>
-        o.customer_name.toLowerCase().includes(q) || o.phone.includes(q)
+        o.customer_name.toLowerCase().includes(q) ||
+        o.phone.includes(q) ||
+        o.phone2?.includes(q)
       )
     }
     return r
@@ -231,7 +233,6 @@ export default function OrdersClient({ initialOrders }: Props) {
           montant: editingOrder.total_price,
           tel: editForm.tel || undefined,
           tel2: editForm.tel2 || undefined,
-          remarque: editForm.remarque || undefined,
         }),
       })
       const data = await res.json()
@@ -363,7 +364,6 @@ export default function OrdersClient({ initialOrders }: Props) {
                     commune: order.commune ?? '',
                     tel: order.phone ?? '',
                     tel2: order.phone2 ?? '',
-                    remarque: order.notes ?? '',
                   })
                 }}
                 className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border"
@@ -490,7 +490,10 @@ export default function OrdersClient({ initialOrders }: Props) {
                     {order.customer_name}
                   </td>
                   <td className="px-4 py-3 font-body text-sm text-muted" dir="ltr">
-                    {order.phone}
+                    <span className="block">{order.phone}</span>
+                    {order.phone2 && (
+                      <span className="block text-xs text-brand mt-0.5">{order.phone2}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 font-body text-sm text-brand">
                     {order.wilaya_name ?? order.wilaya}
@@ -579,9 +582,12 @@ export default function OrdersClient({ initialOrders }: Props) {
                           </div>
                         ))}
                         {order.notes && (
-                          <p className="text-xs text-muted font-body pr-1">
-                            ملاحظة: {order.notes}
-                          </p>
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                            <p className="text-xs font-heading font-bold text-amber-900 mb-1">ملاحظة الزبون</p>
+                            <p className="text-sm text-brand font-body whitespace-pre-wrap break-words">
+                              {order.notes}
+                            </p>
+                          </div>
                         )}
                         {/* Delivery info */}
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border flex-wrap">
@@ -644,6 +650,9 @@ export default function OrdersClient({ initialOrders }: Props) {
               <div>
                 <p className="font-heading font-bold text-base text-brand">{order.customer_name}</p>
                 <p className="text-sm text-muted font-body" dir="ltr">{order.phone}</p>
+                {order.phone2 && (
+                  <p className="text-sm text-brand font-body" dir="ltr">{order.phone2}</p>
+                )}
               </div>
               <span className={cn(
                 'px-2.5 py-1 rounded-full text-[11px] font-bold font-heading flex-shrink-0',
@@ -704,6 +713,40 @@ export default function OrdersClient({ initialOrders }: Props) {
                     <span className="text-[10px] text-muted font-body">{item.color_name} / {item.size_label} ×{item.quantity}</span>
                   </div>
                 ))}
+                {order.notes && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                    <p className="text-xs font-heading font-bold text-amber-900 mb-1">ملاحظة الزبون</p>
+                    <p className="text-sm leading-6 text-brand font-body whitespace-pre-wrap break-words">
+                      {order.notes}
+                    </p>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2 rounded-lg border border-border bg-surface p-3 text-xs">
+                  <div className="col-span-2">
+                    <span className="text-muted font-body">نوع التوصيل: </span>
+                    <span className="font-heading font-bold text-brand">
+                      {order.delivery_type === 'home' ? 'توصيل للمنزل' : 'استلام من المكتب'}
+                    </span>
+                  </div>
+                  {order.address && (
+                    <div className="col-span-2">
+                      <span className="text-muted font-body">العنوان: </span>
+                      <span className="font-heading font-bold text-brand break-words">{order.address}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-muted font-body">التوصيل: </span>
+                    <span className="font-heading font-bold text-brand">
+                      {order.delivery_price?.toLocaleString('ar-DZ')} دج
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted font-body">الإجمالي: </span>
+                    <span className="font-heading font-black text-accent">
+                      {order.total_price?.toLocaleString('ar-DZ')} دج
+                    </span>
+                  </div>
+                </div>
                 {/* Ecotrack Section — mobile */}
                 {renderEcotrackSection(order)}
               </div>
@@ -806,7 +849,6 @@ export default function OrdersClient({ initialOrders }: Props) {
                 { label: 'الهاتف 2', key: 'tel2', placeholder: '0600000000' },
                 { label: 'العنوان', key: 'adresse', placeholder: 'العنوان الكامل' },
                 { label: 'البلدية', key: 'commune', placeholder: 'البلدية' },
-                { label: 'ملاحظات', key: 'remarque', placeholder: 'ملاحظات إضافية' },
               ].map(({ label, key, placeholder }) => (
                 <div key={key}>
                   <label className="block text-xs font-heading font-bold text-brand mb-1 text-right">

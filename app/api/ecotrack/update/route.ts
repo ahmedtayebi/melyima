@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     if (auth instanceof NextResponse) return auth
 
     const body = await req.json()
-    const { tracking, order_id, adresse, commune, montant, tel, tel2, remarque } = body
+    const { tracking, order_id, adresse, commune, montant, tel, tel2 } = body
     if (!tracking || !order_id) return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
 
     const supabase = createClient(
@@ -31,7 +31,6 @@ export async function POST(req: NextRequest) {
       montant,
       tel,
       tel2,
-      remarque,
     })
 
     if (!result.success) return NextResponse.json({ success: false, error: result.message }, { status: 400 })
@@ -41,7 +40,6 @@ export async function POST(req: NextRequest) {
     if (commune)  dbFields.commune = commune
     if (tel)      dbFields.phone   = tel
     if (tel2)     dbFields.phone2  = tel2
-    if (remarque) dbFields.notes   = remarque
 
     if (Object.keys(dbFields).length > 0) {
       const { error: dbError } = await supabase.from('orders').update(dbFields).eq('id', order_id)

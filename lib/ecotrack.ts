@@ -180,7 +180,6 @@ export async function ecotrackCreateOrder(params: {
   montant: number
   stop_desk: number
   produit?: string
-  remarque?: string
   reference?: string
 }): Promise<{ success: boolean; tracking?: string; message?: string }> {
   try {
@@ -196,7 +195,6 @@ export async function ecotrackCreateOrder(params: {
       stock: '0',
       ...(params.telephone_2 && { telephone_2: params.telephone_2 }),
       ...(params.produit && { produit: params.produit }),
-      ...(params.remarque && { remarque: params.remarque }),
       ...(params.reference && { reference: params.reference }),
     })
 
@@ -239,7 +237,6 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
   montant?: number
   tel?: string
   tel2?: string
-  remarque?: string
 }): Promise<{ success: boolean; message?: string }> {
   try {
     const body = formBody({
@@ -252,7 +249,6 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
       montant: params.montant ? String(params.montant) : undefined,
       tel: params.tel,
       tel2: params.tel2,
-      remarque: params.remarque,
     })
 
     const res = await fetch(`${BASE_URL}/api/v1/update/order`, {

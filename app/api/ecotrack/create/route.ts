@@ -62,7 +62,6 @@ export async function POST(req: NextRequest) {
       montant: order.total_price,
       stop_desk: stopDesk,
       produit,
-      remarque: order.notes ?? undefined,
       reference: order.id.slice(-8).toUpperCase(),
     })
 
