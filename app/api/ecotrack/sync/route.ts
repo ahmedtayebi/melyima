@@ -217,6 +217,7 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
     .from('orders')
     .select('id, ecotrack_tracking, order_items!inner(id)')
     .in('ecotrack_tracking', trackingNumbers)
+    .is('deleted_at', null)
 
   if (dbQueryError) {
     return NextResponse.json({ success: false, error: 'DB query failed' }, { status: 500 })
@@ -260,6 +261,7 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
       .from('orders')
       .select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking')
       .is('ecotrack_tracking', null)
+      .is('deleted_at', null)
 
     if (candidatesError) {
       return NextResponse.json({ success: false, error: 'DB fallback query failed' }, { status: 500 })

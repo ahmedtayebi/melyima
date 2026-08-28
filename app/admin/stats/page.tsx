@@ -8,6 +8,7 @@ export default async function StatsPage() {
   const { data: orders, error } = await supabase
     .from('orders')
     .select('id, status, total_price, products_total, delivery_price, wilaya_name, wilaya, created_at, order_items!inner(product_name, quantity)')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .limit(5000)
 

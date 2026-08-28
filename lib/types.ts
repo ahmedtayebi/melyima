@@ -73,6 +73,8 @@ export interface Order {
   notes: string | null
   created_at: string
   updated_at: string
+  deleted_at?: string | null
+  deleted_from_status?: 'pending' | 'confirmed' | 'delivered' | 'cancelled' | null
   order_items?: OrderItem[]
   ecotrack_tracking?: string | null
   ecotrack_status?: 'none' | 'draft' | 'shipped' | null

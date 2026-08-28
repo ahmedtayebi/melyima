@@ -1,13 +1,15 @@
 'use client'
 
 import React, { useState, useMemo, useEffect, useRef } from 'react'
-import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, X, AlertTriangle } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, AlertTriangle, RotateCcw, ArchiveRestore } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { Order } from '@/lib/types'
+import Modal from '@/components/ui/Modal'
+import OrderEditForm from '@/components/admin/OrderEditForm'
+import type { Order, Product } from '@/lib/types'
 
 type OrderStatus = 'pending' | 'confirmed' | 'delivered' | 'cancelled'
-type FilterType = 'all' | OrderStatus
+type FilterType = 'all' | 'deleted' | OrderStatus
 
 const STATUS_CONFIG: Record<OrderStatus, { label: string; badge: string; select: string }> = {
   pending:   { label: 'قيد الانتظار', badge: 'bg-amber-100 text-amber-800',  select: 'قيد الانتظار' },
@@ -22,24 +24,25 @@ const FILTER_TABS: { key: FilterType; label: string }[] = [
   { key: 'confirmed', label: 'مؤكدة' },
   { key: 'delivered', label: 'مُسلَّمة' },
   { key: 'cancelled', label: 'ملغاة' },
+  { key: 'deleted',   label: 'المحذوفة' },
 ]
 
 const PER_PAGE = 20
 const ADMIN_ORDERS_REFRESH_MS = 300_000
 
-interface Props { initialOrders: Order[] }
+interface Props {
+  initialOrders: Order[]
+  products: Product[]
+}
 
-export default function OrdersClient({ initialOrders }: Props) {
+export default function OrdersClient({ initialOrders, products }: Props) {
   const [orders, setOrders] = useState<Order[]>(initialOrders)
   const [filter, setFilter] = useState<FilterType>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
-  const [editForm, setEditForm] = useState({
-    adresse: '', commune: '', tel: '', tel2: '',
-  })
+  const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
     onConfirm: () => void;
@@ -68,7 +71,7 @@ export default function OrdersClient({ initialOrders }: Props) {
     let ignore = false
 
     const refreshOrders = async (force = false) => {
-      if (document.hidden || confirmDialog || editingOrder) return
+      if (document.hidden || confirmDialog) return
       if (Object.values(ecotrackLoadingRef.current).some(Boolean)) return
 
       const now = Date.now()
@@ -103,21 +106,24 @@ export default function OrdersClient({ initialOrders }: Props) {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [confirmDialog, editingOrder])
+  }, [confirmDialog])
 
   // ── Stats ─────────────────────────────────────────────────
   const stats = useMemo(() => ({
-    all:       orders.length,
-    pending:   orders.filter(o => o.status === 'pending').length,
-    confirmed: orders.filter(o => o.status === 'confirmed').length,
-    delivered: orders.filter(o => o.status === 'delivered').length,
-    cancelled: orders.filter(o => o.status === 'cancelled').length,
+    all:       orders.filter(o => !o.deleted_at).length,
+    pending:   orders.filter(o => !o.deleted_at && o.status === 'pending').length,
+    confirmed: orders.filter(o => !o.deleted_at && o.status === 'confirmed').length,
+    delivered: orders.filter(o => !o.deleted_at && o.status === 'delivered').length,
+    cancelled: orders.filter(o => !o.deleted_at && o.status === 'cancelled').length,
+    deleted:   orders.filter(o => Boolean(o.deleted_at)).length,
   }), [orders])
 
   // ── Filtered + searched + paginated ───────────────────────
   const filtered = useMemo(() => {
-    let r = orders
-    if (filter !== 'all') r = r.filter(o => o.status === filter)
+    let r = filter === 'deleted'
+      ? orders.filter(o => Boolean(o.deleted_at))
+      : orders.filter(o => !o.deleted_at)
+    if (filter !== 'all' && filter !== 'deleted') r = r.filter(o => o.status === filter)
     if (search.trim()) {
       const q = search.toLowerCase()
       r = r.filter(o =>
@@ -218,35 +224,6 @@ export default function OrdersClient({ initialOrders }: Props) {
     })
   }
 
-  const updateEcotrackOrder = async () => {
-    if (!editingOrder?.ecotrack_tracking) return
-    setLoading(editingOrder.id, 'update', true)
-    try {
-      const res = await fetch('/api/ecotrack/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tracking: editingOrder.ecotrack_tracking,
-          order_id: editingOrder.id,
-          adresse: editForm.adresse || undefined,
-          commune: editForm.commune || undefined,
-          montant: editingOrder.total_price,
-          tel: editForm.tel || undefined,
-          tel2: editForm.tel2 || undefined,
-        }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        setEditingOrder(null)
-        showToast('تم التعديل بنجاح ✓', 'success')
-      } else {
-        showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
-      }
-    } finally {
-      setLoading(editingOrder.id, 'update', false)
-    }
-  }
-
   // ── Status update ─────────────────────────────────────────
   const updateStatus = async (orderId: string, status: OrderStatus) => {
     const currentOrder = orders.find(o => o.id === orderId)
@@ -264,7 +241,7 @@ export default function OrdersClient({ initialOrders }: Props) {
 
   const deleteOrder = (order: Order) => {
     setConfirmDialog({
-      message: `حذف طلب ${order.customer_name} نهائياً؟ سيتم حذف البوليصة من شركة التوصيل إن وجدت، ثم حذف الطلب وإرجاع المخزون.`,
+      message: `نقل طلب ${order.customer_name} إلى المحذوفات؟ ستُحذف مسودة التوصيل إن وجدت ويعود المخزون، ويمكن استرجاع الطلب لاحقًا.`,
       onConfirm: async () => {
         setConfirmDialog(null)
         setLoading(order.id, 'delete-order', true)
@@ -276,9 +253,19 @@ export default function OrdersClient({ initialOrders }: Props) {
           const data = await res.json()
 
           if (data.success) {
-            setOrders(prev => prev.filter(item => item.id !== order.id))
+            const deletedAt = new Date().toISOString()
+            setOrders(prev => prev.map(item => item.id === order.id
+              ? {
+                  ...item,
+                  deleted_at: deletedAt,
+                  deleted_from_status: item.status,
+                  ecotrack_tracking: null,
+                  ecotrack_status: 'none' as const,
+                }
+              : item
+            ))
             if (expandedId === order.id) setExpandedId(null)
-            showToast('تم حذف الطلب والبوليصة وإرجاع المخزون', 'success')
+            showToast('نُقل الطلب إلى المحذوفات وعاد المخزون', 'success')
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
           }
@@ -287,6 +274,104 @@ export default function OrdersClient({ initialOrders }: Props) {
         }
       },
     })
+  }
+
+  const revertToPending = (order: Order) => {
+    setConfirmDialog({
+      message: `إرجاع طلب ${order.customer_name} إلى قيد الانتظار؟ ستُحذف مسودة Ecotrack الحالية.`,
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setLoading(order.id, 'pending', true)
+        try {
+          const res = await fetch(`/api/orders/${order.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'pending' }),
+          })
+          const data = await res.json()
+          if (data.success) {
+            setOrders(prev => prev.map(item => item.id === order.id
+              ? { ...item, status: 'pending', ecotrack_tracking: null, ecotrack_status: 'none' as const }
+              : item
+            ))
+            showToast('عاد الطلب إلى قيد الانتظار', 'success')
+          } else {
+            showToast('خطأ: ' + (data.error ?? 'تعذّر إرجاع الطلب'), 'error')
+          }
+        } finally {
+          setLoading(order.id, 'pending', false)
+        }
+      },
+    })
+  }
+
+  const restoreOrder = async (order: Order) => {
+    setLoading(order.id, 'restore', true)
+    try {
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restore' }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setOrders(prev => prev.map(item => item.id === order.id
+          ? {
+              ...item,
+              status: 'pending',
+              deleted_at: null,
+              deleted_from_status: null,
+              ecotrack_tracking: null,
+              ecotrack_status: 'none' as const,
+            }
+          : item
+        ))
+        showToast('تم استرجاع الطلب وحجز المخزون', 'success')
+      } else {
+        showToast('خطأ: ' + (data.error ?? 'تعذّر استرجاع الطلب'), 'error')
+      }
+    } finally {
+      setLoading(order.id, 'restore', false)
+    }
+  }
+
+  const permanentlyDeleteOrder = (order: Order) => {
+    setConfirmDialog({
+      message: `حذف طلب ${order.customer_name} نهائيًا؟ لن يمكن استرجاعه بعد ذلك.`,
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setLoading(order.id, 'permanent-delete', true)
+        try {
+          const res = await fetch(`/api/orders/${order.id}?permanent=1`, { method: 'DELETE' })
+          const data = await res.json()
+          if (data.success) {
+            setOrders(prev => prev.filter(item => item.id !== order.id))
+            if (expandedId === order.id) setExpandedId(null)
+            showToast('تم حذف الطلب نهائيًا', 'success')
+          } else {
+            showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
+          }
+        } finally {
+          setLoading(order.id, 'permanent-delete', false)
+        }
+      },
+    })
+  }
+
+  const handleOrderSaved = async () => {
+    setEditingOrder(null)
+
+    try {
+      const response = await fetch('/api/admin/orders', { cache: 'no-store' })
+      const data = await response.json()
+      if (response.ok && data.success && Array.isArray(data.orders)) {
+        setOrders(data.orders)
+      }
+    } catch {
+      // The edit is already saved; the regular refresh will reconcile the list.
+    } finally {
+      showToast('تم حفظ تعديلات الطلب', 'success')
+    }
   }
 
   const formatDate = (d: string) => {
@@ -329,7 +414,7 @@ export default function OrdersClient({ initialOrders }: Props) {
             </button>
           )}
 
-          {/* Draft — show tracking + ship + delete + edit */}
+          {/* Draft — show tracking + ship + delete */}
           {order.ecotrack_tracking && order.ecotrack_status === 'draft' && (
             <>
               <span className="text-xs font-body text-muted" dir="ltr">
@@ -355,21 +440,6 @@ export default function OrdersClient({ initialOrders }: Props) {
                   ? <Loader2 size={12} className="animate-spin" />
                   : <Trash2 size={12} />}
                 حذف
-              </button>
-              <button
-                onClick={() => {
-                  setEditingOrder(order)
-                  setEditForm({
-                    adresse: order.address ?? '',
-                    commune: order.commune ?? '',
-                    tel: order.phone ?? '',
-                    tel2: order.phone2 ?? '',
-                  })
-                }}
-                className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border"
-              >
-                <Pencil size={12} />
-                تعديل
               </button>
             </>
           )}
@@ -402,7 +472,7 @@ export default function OrdersClient({ initialOrders }: Props) {
       <div className="flex items-center gap-3">
         <h1 className="font-heading font-black text-2xl text-brand">الطلبات</h1>
         <span className="bg-brand text-white text-xs font-bold font-heading px-2.5 py-1 rounded-full">
-          {orders.length}
+          {stats.all}
         </span>
       </div>
 
@@ -482,7 +552,7 @@ export default function OrdersClient({ initialOrders }: Props) {
               </tr>
             ) : paginated.map((order) => (
               <React.Fragment key={order.id}>
-                <tr className="hover:bg-surface/50 transition-colors">
+                <tr className={cn('hover:bg-surface/50 transition-colors', order.deleted_at && 'opacity-70')}>
                   <td className="px-4 py-3 font-body text-xs text-muted tabular-nums">
                     #{order.id.slice(-6).toUpperCase()}
                   </td>
@@ -507,9 +577,11 @@ export default function OrdersClient({ initialOrders }: Props) {
                   <td className="px-4 py-3">
                     <span className={cn(
                       'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold font-heading',
-                      STATUS_CONFIG[order.status as OrderStatus]?.badge ?? 'bg-gray-100 text-gray-700'
+                      order.deleted_at
+                        ? 'bg-gray-200 text-gray-700'
+                        : STATUS_CONFIG[order.status as OrderStatus]?.badge ?? 'bg-gray-100 text-gray-700'
                     )}>
-                      {STATUS_CONFIG[order.status as OrderStatus]?.label ?? order.status}
+                      {order.deleted_at ? 'محذوف' : STATUS_CONFIG[order.status as OrderStatus]?.label ?? order.status}
                     </span>
                   </td>
                   <td className="px-4 py-3 font-body text-xs text-muted tabular-nums">
@@ -527,7 +599,32 @@ export default function OrdersClient({ initialOrders }: Props) {
                           ? <ChevronUp size={15} />
                           : <ChevronDown size={15} />}
                       </button>
-                      {order.status === 'pending' ? (
+                      {order.deleted_at ? (
+                        <>
+                          <button
+                            onClick={() => restoreOrder(order)}
+                            disabled={ecotrackLoading[`${order.id}-restore`]}
+                            className="p-1.5 rounded-lg text-green-700 hover:bg-green-50 transition-colors disabled:opacity-50"
+                            aria-label="استرجاع الطلب"
+                            title="استرجاع الطلب"
+                          >
+                            {ecotrackLoading[`${order.id}-restore`]
+                              ? <Loader2 size={15} className="animate-spin" />
+                              : <ArchiveRestore size={15} />}
+                          </button>
+                          <button
+                            onClick={() => permanentlyDeleteOrder(order)}
+                            disabled={ecotrackLoading[`${order.id}-permanent-delete`]}
+                            className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                            aria-label="حذف الطلب نهائيًا"
+                            title="حذف الطلب نهائيًا"
+                          >
+                            {ecotrackLoading[`${order.id}-permanent-delete`]
+                              ? <Loader2 size={15} className="animate-spin" />
+                              : <Trash2 size={15} />}
+                          </button>
+                        </>
+                      ) : order.status === 'pending' ? (
                         <button
                           onClick={() => updateStatus(order.id, 'confirmed')}
                           className="text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90"
@@ -535,21 +632,41 @@ export default function OrdersClient({ initialOrders }: Props) {
                         >
                           تأكيد الطلب
                         </button>
-                      ) : (
-                        <span className="text-xs font-body text-muted px-2">
-                        </span>
+                      ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
+                        <button
+                          onClick={() => revertToPending(order)}
+                          disabled={ecotrackLoading[`${order.id}-pending`]}
+                          className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-2.5 py-1.5 rounded-lg border border-border disabled:opacity-50"
+                        >
+                          {ecotrackLoading[`${order.id}-pending`]
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <RotateCcw size={13} />}
+                          إرجاع
+                        </button>
+                      ) : null}
+                      {!order.deleted_at && (
+                        <button
+                          onClick={() => setEditingOrder(order)}
+                          className="p-1.5 rounded-lg text-muted hover:text-brand hover:bg-surface transition-colors"
+                          aria-label="تعديل الطلب"
+                          title="تعديل الطلب"
+                        >
+                          <Pencil size={15} />
+                        </button>
                       )}
-                      <button
-                        onClick={() => deleteOrder(order)}
-                        disabled={ecotrackLoading[`${order.id}-delete-order`]}
-                        className="p-1.5 rounded-lg text-muted hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                        aria-label="حذف الطلب نهائياً"
-                        title="حذف الطلب نهائياً"
-                      >
-                        {ecotrackLoading[`${order.id}-delete-order`]
-                          ? <Loader2 size={15} className="animate-spin" />
-                          : <Trash2 size={15} />}
-                      </button>
+                      {!order.deleted_at && order.status !== 'delivered' && order.ecotrack_status !== 'shipped' && (
+                        <button
+                          onClick={() => deleteOrder(order)}
+                          disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                          className="p-1.5 rounded-lg text-muted hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                          aria-label="نقل الطلب إلى المحذوفات"
+                          title="نقل إلى المحذوفات"
+                        >
+                          {ecotrackLoading[`${order.id}-delete-order`]
+                            ? <Loader2 size={15} className="animate-spin" />
+                            : <Trash2 size={15} />}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -629,7 +746,7 @@ export default function OrdersClient({ initialOrders }: Props) {
                           </div>
                         </div>
                         {/* Ecotrack Section */}
-                        {renderEcotrackSection(order)}
+                        {!order.deleted_at && renderEcotrackSection(order)}
                       </div>
                     </td>
                   </tr>
@@ -656,9 +773,11 @@ export default function OrdersClient({ initialOrders }: Props) {
               </div>
               <span className={cn(
                 'px-2.5 py-1 rounded-full text-[11px] font-bold font-heading flex-shrink-0',
-                STATUS_CONFIG[order.status as OrderStatus]?.badge
+                order.deleted_at
+                  ? 'bg-gray-200 text-gray-700'
+                  : STATUS_CONFIG[order.status as OrderStatus]?.badge
               )}>
-                {STATUS_CONFIG[order.status as OrderStatus]?.label}
+                {order.deleted_at ? 'محذوف' : STATUS_CONFIG[order.status as OrderStatus]?.label}
               </span>
             </div>
             <div className="flex items-center gap-4 text-xs text-muted font-body">
@@ -668,7 +787,7 @@ export default function OrdersClient({ initialOrders }: Props) {
               <span>·</span>
               <span className="tabular-nums">{formatDate(order.created_at)}</span>
             </div>
-            <div className="flex items-center gap-2 pt-1 border-t border-border">
+            <div className="flex items-center gap-2 pt-1 border-t border-border flex-wrap">
               <button
                 onClick={() => setExpandedId(expandedId === order.id ? null : order.id)}
                 className="flex items-center gap-1 text-xs text-muted hover:text-brand font-body transition-colors"
@@ -676,7 +795,30 @@ export default function OrdersClient({ initialOrders }: Props) {
                 {expandedId === order.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 التفاصيل
               </button>
-              {order.status === 'pending' ? (
+              {order.deleted_at ? (
+                <>
+                  <button
+                    onClick={() => restoreOrder(order)}
+                    disabled={ecotrackLoading[`${order.id}-restore`]}
+                    className="mr-auto flex items-center gap-1 text-xs font-heading font-bold text-green-700 px-3 py-1.5 rounded-lg border border-green-200 disabled:opacity-50"
+                  >
+                    {ecotrackLoading[`${order.id}-restore`]
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <ArchiveRestore size={12} />}
+                    استرجاع
+                  </button>
+                  <button
+                    onClick={() => permanentlyDeleteOrder(order)}
+                    disabled={ecotrackLoading[`${order.id}-permanent-delete`]}
+                    className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
+                  >
+                    {ecotrackLoading[`${order.id}-permanent-delete`]
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <Trash2 size={12} />}
+                    حذف نهائي
+                  </button>
+                </>
+              ) : order.status === 'pending' ? (
                 <button
                   onClick={() => updateStatus(order.id, 'confirmed')}
                   className="mr-auto text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90"
@@ -684,21 +826,39 @@ export default function OrdersClient({ initialOrders }: Props) {
                 >
                   تأكيد الطلب
                 </button>
-              ) : (
-                <span className="mr-auto text-xs font-body text-muted">
-                  لا إجراء
-                </span>
+              ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
+                <button
+                  onClick={() => revertToPending(order)}
+                  disabled={ecotrackLoading[`${order.id}-pending`]}
+                  className="mr-auto flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border disabled:opacity-50"
+                >
+                  {ecotrackLoading[`${order.id}-pending`]
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <RotateCcw size={12} />}
+                  إرجاع
+                </button>
+              ) : <span className="mr-auto" />}
+              {!order.deleted_at && (
+                <button
+                  onClick={() => setEditingOrder(order)}
+                  className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border"
+                >
+                  <Pencil size={12} />
+                  تعديل
+                </button>
               )}
-              <button
-                onClick={() => deleteOrder(order)}
-                disabled={ecotrackLoading[`${order.id}-delete-order`]}
-                className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
-              >
-                {ecotrackLoading[`${order.id}-delete-order`]
-                  ? <Loader2 size={12} className="animate-spin" />
-                  : <Trash2 size={12} />}
-                حذف
-              </button>
+              {!order.deleted_at && order.status !== 'delivered' && order.ecotrack_status !== 'shipped' && (
+                <button
+                  onClick={() => deleteOrder(order)}
+                  disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                  className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
+                >
+                  {ecotrackLoading[`${order.id}-delete-order`]
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <Trash2 size={12} />}
+                  حذف
+                </button>
+              )}
             </div>
             {expandedId === order.id && (
               <div className="space-y-2 pt-1">
@@ -748,7 +908,7 @@ export default function OrdersClient({ initialOrders }: Props) {
                   </div>
                 </div>
                 {/* Ecotrack Section — mobile */}
-                {renderEcotrackSection(order)}
+                {!order.deleted_at && renderEcotrackSection(order)}
               </div>
             )}
           </div>
@@ -777,6 +937,22 @@ export default function OrdersClient({ initialOrders }: Props) {
           </button>
         </div>
       )}
+
+      <Modal
+        isOpen={Boolean(editingOrder)}
+        onClose={() => setEditingOrder(null)}
+        size="wide"
+      >
+        {editingOrder && (
+          <OrderEditForm
+            key={editingOrder.id}
+            order={editingOrder}
+            products={products}
+            onCancel={() => setEditingOrder(null)}
+            onSaved={handleOrderSaved}
+          />
+        )}
+      </Modal>
 
       {/* Confirm dialog */}
       {confirmDialog && (
@@ -823,65 +999,6 @@ export default function OrdersClient({ initialOrders }: Props) {
         </div>
       )}
 
-      {/* Edit modal */}
-      {editingOrder && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setEditingOrder(null)}
-        >
-          <div
-            className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <button onClick={() => setEditingOrder(null)}>
-                <X size={20} className="text-muted" />
-              </button>
-              <h3 className="font-heading font-black text-lg text-brand">تعديل البوليصة</h3>
-            </div>
-            <p className="text-xs text-muted font-body text-right" dir="ltr">
-              {editingOrder.ecotrack_tracking}
-            </p>
-            <div className="space-y-3">
-              {[
-                { label: 'الهاتف', key: 'tel', placeholder: '0600000000' },
-                { label: 'الهاتف 2', key: 'tel2', placeholder: '0600000000' },
-                { label: 'العنوان', key: 'adresse', placeholder: 'العنوان الكامل' },
-                { label: 'البلدية', key: 'commune', placeholder: 'البلدية' },
-              ].map(({ label, key, placeholder }) => (
-                <div key={key}>
-                  <label className="block text-xs font-heading font-bold text-brand mb-1 text-right">
-                    {label}
-                  </label>
-                  <input
-                    value={editForm[key as keyof typeof editForm]}
-                    onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
-                    placeholder={placeholder}
-                    className="w-full bg-surface border border-border rounded-xl px-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand text-right"
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => setEditingOrder(null)}
-                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm border border-border text-muted"
-              >
-                إلغاء
-              </button>
-              <button
-                onClick={updateEcotrackOrder}
-                disabled={ecotrackLoading[`${editingOrder.id}-update`]}
-                className="flex-1 py-2.5 rounded-xl font-heading font-bold text-sm text-white"
-                style={{ backgroundColor: '#8B1A2E' }}
-              >
-                {ecotrackLoading[`${editingOrder.id}-update`] ? 'جارٍ الحفظ...' : 'حفظ التعديلات'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

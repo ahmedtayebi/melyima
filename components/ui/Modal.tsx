@@ -10,9 +10,10 @@ interface ModalProps {
   onClose: () => void
   title?: string
   children: React.ReactNode
+  size?: 'default' | 'wide'
 }
 
-export default function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export default function Modal({ isOpen, onClose, title, children, size = 'default' }: ModalProps) {
   // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -39,11 +40,16 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
 
           {/* Panel */}
           <motion.div
-            className="relative bg-white rounded-2xl w-full max-w-lg mx-4 shadow-xl max-h-[90vh] flex flex-col"
+            className={`relative bg-white w-full mx-3 sm:mx-4 shadow-xl max-h-[94vh] flex flex-col ${
+              size === 'wide' ? 'max-w-6xl rounded-lg' : 'max-w-lg rounded-2xl'
+            }`}
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title ?? 'نافذة منبثقة'}
           >
             {/* Close button — top-left (RTL visual) */}
             <button

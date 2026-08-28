@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (!order) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    if (order.deleted_at) return NextResponse.json({ success: false, error: 'الطلب موجود في المحذوفات' }, { status: 409 })
     if (order.ecotrack_tracking) return NextResponse.json({ success: true, tracking: order.ecotrack_tracking, already_exists: true })
 
     const code_wilaya =
