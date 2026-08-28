@@ -14,11 +14,12 @@ export default function AdminLayoutClient({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true')
+      const savedState = window.localStorage.getItem(SIDEBAR_STORAGE_KEY)
+      setSidebarCollapsed(savedState === null ? true : savedState === 'true')
     })
     return () => window.cancelAnimationFrame(frame)
   }, [])
