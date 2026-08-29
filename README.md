@@ -59,3 +59,15 @@ UPSTASH_REDIS_REST_TOKEN="..."
 5. In Vercel, add them under Project Settings -> Environment Variables for Production, Preview, and Development as needed, then redeploy.
 
 In production, the public APIs fail closed with an Arabic error message if these variables are missing. In local development, requests are allowed and a warning is logged so the app remains easy to run.
+
+## New Order Email Notifications
+
+New orders can send a non-blocking admin notification through Resend. Verify the sending domain in Resend, then add these server-only variables locally and in Vercel:
+
+```bash
+RESEND_API_KEY="re_..."
+ORDER_NOTIFICATION_EMAIL="admin@example.com"
+ORDER_NOTIFICATION_FROM="MELYIMA <notifications@melyima.com>"
+```
+
+Email delivery failures are logged but do not prevent an order from being saved.

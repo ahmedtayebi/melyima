@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { sendNewOrderNotification } from '@/lib/order-notification-email'
 import { rateLimitPublicApi } from '@/lib/rate-limit'
 
 type IncomingOrderItem = {
@@ -171,7 +172,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    return NextResponse.json({ success: true, order_id: orderId })
+    const savedOrderId = String(orderId)
+    after(async () => {
+      try {
+        await sendNewOrderNotification(savedOrderId)
+      } catch (emailError) {
+        console.error('New order notification email failed:', emailError)
+      }
+    })
+
+    return NextResponse.json({ success: true, order_id: savedOrderId })
   } catch (err) {
     console.error('Unexpected error in POST /api/orders:', err)
     return NextResponse.json(
