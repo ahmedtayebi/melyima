@@ -1,185 +1,3 @@
-alter table public.orders
-  add column if not exists deleted_at timestamp with time zone,
-  add column if not exists deleted_from_status text;
-
-alter table public.orders
-  drop constraint if exists orders_deleted_from_status_check;
-
-alter table public.orders
-  add constraint orders_deleted_from_status_check
-    check (
-      deleted_from_status is null
-      or deleted_from_status in ('pending', 'confirmed', 'delivered', 'cancelled')
-    );
-
-create index if not exists orders_deleted_at_idx
-  on public.orders (deleted_at, created_at desc);
-
-create or replace function public.delete_order_with_stock(p_order_id uuid)
-returns integer
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_order record;
-  v_item record;
-  v_updated integer := 0;
-  v_restored integer := 0;
-begin
-  select id, status, deleted_at, ecotrack_status
-    into v_order
-    from orders
-   where id = p_order_id
-   for update;
-
-  if not found then
-    raise exception 'order_not_found';
-  end if;
-
-  if v_order.deleted_at is not null then
-    raise exception 'order_already_deleted';
-  end if;
-
-  if v_order.status = 'delivered' or v_order.ecotrack_status = 'shipped' then
-    raise exception 'order_locked';
-  end if;
-
-  for v_item in
-    select product_id, color_id, size_id, quantity
-      from order_items
-     where order_id = p_order_id
-  loop
-    if v_item.product_id is not null and v_item.color_id is not null and v_item.size_id is not null then
-      update product_variants
-         set stock = stock + v_item.quantity,
-             updated_at = now()
-       where product_id = v_item.product_id
-         and color_id = v_item.color_id
-         and size_id = v_item.size_id;
-
-      get diagnostics v_updated = row_count;
-      if v_updated > 0 then
-        v_restored := v_restored + 1;
-      end if;
-    end if;
-  end loop;
-
-  update orders
-     set deleted_at = now(),
-         deleted_from_status = status,
-         ecotrack_tracking = null,
-         ecotrack_status = 'none',
-         updated_at = now()
-   where id = p_order_id;
-
-  return v_restored;
-end;
-$$;
-
-create or replace function public.restore_order_with_stock(p_order_id uuid)
-returns integer
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_order record;
-  v_item record;
-  v_has_variant boolean;
-  v_reserved integer := 0;
-begin
-  select id, deleted_at
-    into v_order
-    from orders
-   where id = p_order_id
-   for update;
-
-  if not found then
-    raise exception 'order_not_found';
-  end if;
-
-  if v_order.deleted_at is null then
-    raise exception 'order_not_deleted';
-  end if;
-
-  for v_item in
-    select product_id, color_id, size_id, quantity
-      from order_items
-     where order_id = p_order_id
-  loop
-    if v_item.product_id is null or v_item.color_id is null or v_item.size_id is null then
-      raise exception 'product_unavailable';
-    end if;
-
-    update product_variants
-       set stock = stock - v_item.quantity,
-           updated_at = now()
-     where product_id = v_item.product_id
-       and color_id = v_item.color_id
-       and size_id = v_item.size_id
-       and stock >= v_item.quantity;
-
-    if found then
-      v_reserved := v_reserved + 1;
-    else
-      select exists (
-        select 1
-          from product_variants
-         where product_id = v_item.product_id
-           and color_id = v_item.color_id
-           and size_id = v_item.size_id
-      ) into v_has_variant;
-
-      if v_has_variant then
-        raise exception 'insufficient_stock:%:%:%',
-          v_item.product_id, v_item.color_id, v_item.size_id;
-      end if;
-
-      -- Missing variant rows are the legacy representation of unlimited stock.
-    end if;
-  end loop;
-
-  update orders
-     set deleted_at = null,
-         deleted_from_status = null,
-         status = 'pending',
-         ecotrack_tracking = null,
-         ecotrack_status = 'none',
-         updated_at = now()
-   where id = p_order_id;
-
-  return v_reserved;
-end;
-$$;
-
-create or replace function public.permanently_delete_order(p_order_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_deleted_at timestamp with time zone;
-begin
-  select deleted_at
-    into v_deleted_at
-    from orders
-   where id = p_order_id
-   for update;
-
-  if not found then
-    raise exception 'order_not_found';
-  end if;
-
-  if v_deleted_at is null then
-    raise exception 'order_not_deleted';
-  end if;
-
-  delete from orders where id = p_order_id;
-end;
-$$;
-
 create or replace function public.update_order_with_stock(
   p_order_id uuid,
   p_customer_name text,
@@ -357,7 +175,7 @@ begin
           v_item.product_id, v_item.color_id, v_item.size_id;
       end if;
 
-      raise exception 'product_unavailable';
+      -- Missing variant rows are the legacy representation of unlimited stock.
     end if;
 
     v_products_total := v_products_total + (v_product.price * v_item.quantity);
@@ -438,16 +256,11 @@ begin
 end;
 $$;
 
-revoke all on function public.delete_order_with_stock(uuid) from public;
-revoke all on function public.restore_order_with_stock(uuid) from public;
-revoke all on function public.permanently_delete_order(uuid) from public;
 revoke all on function public.update_order_with_stock(
   uuid, text, text, text, text, text, text, numeric, text, text, text, jsonb
 ) from public;
 
-grant execute on function public.delete_order_with_stock(uuid) to service_role;
-grant execute on function public.restore_order_with_stock(uuid) to service_role;
-grant execute on function public.permanently_delete_order(uuid) to service_role;
 grant execute on function public.update_order_with_stock(
   uuid, text, text, text, text, text, text, numeric, text, text, text, jsonb
 ) to service_role;
+
