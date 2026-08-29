@@ -2,7 +2,6 @@ import { after, NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 import { sendNewOrderNotification } from '@/lib/order-notification-email'
-import { rateLimitPublicApi } from '@/lib/rate-limit'
 
 type IncomingOrderItem = {
   product_id: string
@@ -51,9 +50,6 @@ function getOrderErrorMessage(message: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const rateLimited = await rateLimitPublicApi(req, 'orders')
-    if (rateLimited) return rateLimited
-
     const body = await req.json()
     const {
       customer_name, phone, phone2, wilaya, commune,

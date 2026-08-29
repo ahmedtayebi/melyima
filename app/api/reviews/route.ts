@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { rateLimitPublicApi } from '@/lib/rate-limit'
 
 const REVIEW_IMAGES_BUCKET_PATH = '/storage/v1/object/public/review-images/'
 
@@ -21,9 +20,6 @@ function isOwnReviewImageUrl(value: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const rateLimited = await rateLimitPublicApi(req, 'reviews')
-    if (rateLimited) return rateLimited
-
     const { customer_name, rating, comment, images } = await req.json()
 
     if (!customer_name?.trim() || !rating || !comment?.trim()) {
