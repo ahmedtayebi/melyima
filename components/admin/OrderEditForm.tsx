@@ -204,7 +204,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
 
       {!locked && order.status === 'confirmed' && (
         <div className="border border-blue-200 bg-blue-50 px-4 py-3 rounded-lg text-sm text-blue-900 font-body">
-          عند الحفظ ستُحذف مسودة Ecotrack ويعود الطلب إلى قيد الانتظار لمراجعته ثم تأكيده مجددًا.
+          سيبقى الطلب مؤكدًا، وستُحدَّث مسودة Ecotrack تلقائيًا عند الحفظ.
         </div>
       )}
 

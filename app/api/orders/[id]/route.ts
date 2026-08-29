@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
-import { ecotrackDeleteOrder } from '@/lib/ecotrack'
+import { ecotrackDeleteOrder, ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -18,6 +18,36 @@ type IncomingOrderItem = {
   color_id?: unknown
   size_id?: unknown
   quantity?: unknown
+}
+
+type StoredOrderItem = {
+  product_id: string | null
+  color_id: string | null
+  size_id: string | null
+  product_name: string
+  color_name: string
+  size_label: string
+  quantity: number
+}
+
+type EditableProduct = {
+  id: string
+  name: string
+  price: number
+  product_colors: { id: string; name: string }[]
+  product_sizes: { id: string; label: string }[]
+  product_variants: { color_id: string; size_id: string; stock: number }[]
+}
+
+function itemKey(productId: string, colorId: string, sizeId: string) {
+  return `${productId}:${colorId}:${sizeId}`
+}
+
+function productDescription(items: StoredOrderItem[]) {
+  return items
+    .map(item => `${item.product_name} - ${item.color_name} - ${item.size_label} x${item.quantity}`)
+    .join(', ')
+    .substring(0, 255)
 }
 
 function adminClient() {
@@ -237,7 +267,12 @@ export async function PUT(req: NextRequest, { params }: Props) {
     const supabase = adminClient()
     const { data: currentOrder, error: fetchError } = await supabase
       .from('orders')
-      .select('id, status, notes, deleted_at, ecotrack_tracking, ecotrack_status')
+      .select(`
+        id, customer_name, phone, phone2, wilaya, wilaya_name, commune,
+        delivery_type, delivery_price, products_total, total_price, address,
+        status, notes, deleted_at, ecotrack_tracking, ecotrack_status,
+        order_items(product_id, color_id, size_id, product_name, color_name, size_label, quantity)
+      `)
       .eq('id', id)
       .single()
 
@@ -290,26 +325,6 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'لا يمكن تعديل الطلب بهذه الحالة' }, { status: 409 })
     }
 
-    if (currentOrder.status === 'confirmed' && currentOrder.ecotrack_tracking) {
-      const result = await ecotrackDeleteOrder(currentOrder.ecotrack_tracking)
-      if (!result.success) {
-        return NextResponse.json(
-          { success: false, error: result.message || 'تعذّر حذف مسودة Ecotrack قبل التعديل' },
-          { status: 502 }
-        )
-      }
-    }
-
-    if (currentOrder.status === 'confirmed') {
-      const { error } = await supabase
-        .from('orders')
-        .update({ status: 'pending', ecotrack_tracking: null, ecotrack_status: 'none' })
-        .eq('id', id)
-      if (error) {
-        return NextResponse.json({ success: false, error: 'تعذّر تجهيز الطلب للتعديل' }, { status: 500 })
-      }
-    }
-
     const deliveryPrice = deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office
     const rpcItems = items.map(item => ({
       product_id: String(item.product_id),
@@ -317,6 +332,109 @@ export async function PUT(req: NextRequest, { params }: Props) {
       size_id: String(item.size_id),
       quantity: Number(item.quantity),
     }))
+
+    const combinations = rpcItems.map(item => itemKey(item.product_id, item.color_id, item.size_id))
+    if (new Set(combinations).size !== combinations.length) {
+      return NextResponse.json(
+        { success: false, error: 'نفس المنتج واللون والمقاس مكرر داخل الطلب' },
+        { status: 400 }
+      )
+    }
+
+    const productIds = [...new Set(rpcItems.map(item => item.product_id))]
+    const { data: productData, error: productError } = await supabase
+      .from('products')
+      .select(`
+        id, name, price,
+        product_colors(id, name),
+        product_sizes(id, label),
+        product_variants(color_id, size_id, stock)
+      `)
+      .in('id', productIds)
+
+    if (productError) {
+      return NextResponse.json({ success: false, error: 'تعذّر التحقق من المنتجات' }, { status: 500 })
+    }
+
+    const products = new Map(
+      ((productData ?? []) as EditableProduct[]).map(product => [product.id, product])
+    )
+    const oldQuantities = new Map<string, number>()
+    for (const item of (currentOrder.order_items ?? []) as StoredOrderItem[]) {
+      if (!item.product_id || !item.color_id || !item.size_id) continue
+      const key = itemKey(item.product_id, item.color_id, item.size_id)
+      oldQuantities.set(key, (oldQuantities.get(key) ?? 0) + item.quantity)
+    }
+
+    let productsTotal = 0
+    const productLabels: string[] = []
+    for (const item of rpcItems) {
+      const product = products.get(item.product_id)
+      const color = product?.product_colors.find(entry => entry.id === item.color_id)
+      const size = product?.product_sizes.find(entry => entry.id === item.size_id)
+
+      if (!product || !color || !size) {
+        return NextResponse.json(
+          { success: false, error: 'أحد المنتجات أو الخيارات لم يعد متاحًا' },
+          { status: 409 }
+        )
+      }
+
+      const variant = product.product_variants.find(entry =>
+        entry.color_id === item.color_id && entry.size_id === item.size_id
+      )
+      const availableStock = variant
+        ? variant.stock + (oldQuantities.get(itemKey(item.product_id, item.color_id, item.size_id)) ?? 0)
+        : null
+
+      if (availableStock !== null && availableStock < item.quantity) {
+        return NextResponse.json(
+          { success: false, error: 'المخزون غير كافٍ لأحد المنتجات أو المقاسات' },
+          { status: 409 }
+        )
+      }
+
+      productsTotal += Number(product.price) * item.quantity
+      productLabels.push(`${product.name} - ${color.name} - ${size.label} x${item.quantity}`)
+    }
+
+    const nextEcotrackData = {
+      client: customerName,
+      adresse: deliveryType === 'home' ? address : commune,
+      commune,
+      wilaya: Number(deliveryEntry.code),
+      montant: productsTotal + deliveryPrice,
+      tel: phone,
+      tel2: phone2 ?? '',
+      product: productLabels.join(', ').substring(0, 255),
+      stop_desk: deliveryType === 'office' ? 1 : 0,
+    }
+    const previousEcotrackData = {
+      client: currentOrder.customer_name,
+      adresse: currentOrder.address ?? currentOrder.commune ?? currentOrder.wilaya_name ?? currentOrder.wilaya,
+      commune: currentOrder.commune ?? currentOrder.wilaya_name ?? currentOrder.wilaya,
+      wilaya: WILAYA_CODE_BY_NUMBER[currentOrder.wilaya] ?? Number(currentOrder.wilaya),
+      montant: Number(currentOrder.total_price),
+      tel: currentOrder.phone,
+      tel2: currentOrder.phone2 ?? '',
+      product: productDescription((currentOrder.order_items ?? []) as StoredOrderItem[]),
+      stop_desk: currentOrder.delivery_type === 'office' ? 1 : 0,
+    }
+
+    const shouldUpdateEcotrack =
+      currentOrder.status === 'confirmed' &&
+      currentOrder.ecotrack_status === 'draft' &&
+      Boolean(currentOrder.ecotrack_tracking)
+
+    if (shouldUpdateEcotrack) {
+      const result = await ecotrackUpdateOrder(currentOrder.ecotrack_tracking!, nextEcotrackData)
+      if (!result.success) {
+        return NextResponse.json(
+          { success: false, error: result.message || 'تعذّر تحديث مسودة Ecotrack' },
+          { status: 502 }
+        )
+      }
+    }
 
     const { data: totals, error } = await supabase.rpc('update_order_with_stock', {
       p_order_id: id,
@@ -334,11 +452,17 @@ export async function PUT(req: NextRequest, { params }: Props) {
     })
 
     if (error) {
+      if (shouldUpdateEcotrack) {
+        const rollback = await ecotrackUpdateOrder(currentOrder.ecotrack_tracking!, previousEcotrackData)
+        if (!rollback.success) {
+          console.error('Failed to restore Ecotrack draft after order update error:', rollback.message)
+        }
+      }
       const mapped = orderError(error.message)
       return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
     }
 
-    return NextResponse.json({ success: true, status: 'pending', totals })
+    return NextResponse.json({ success: true, status: currentOrder.status, totals })
   } catch (error) {
     console.error('Unexpected PUT /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })

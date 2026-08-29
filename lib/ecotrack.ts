@@ -92,7 +92,7 @@ function ecotrackHeaders(contentType?: string) {
 function formBody(params: Record<string, string | undefined>) {
   const body = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value) body.set(key, value)
+    if (value !== undefined) body.set(key, value)
   })
   return body
 }
@@ -237,6 +237,8 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
   montant?: number
   tel?: string
   tel2?: string
+  product?: string
+  stop_desk?: number
 }): Promise<{ success: boolean; message?: string }> {
   try {
     const body = formBody({
@@ -245,10 +247,12 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
       client: params.client,
       adresse: params.adresse,
       commune: params.commune,
-      wilaya: params.wilaya ? String(params.wilaya) : undefined,
-      montant: params.montant ? String(params.montant) : undefined,
+      wilaya: params.wilaya !== undefined ? String(params.wilaya) : undefined,
+      montant: params.montant !== undefined ? String(params.montant) : undefined,
       tel: params.tel,
       tel2: params.tel2,
+      product: params.product,
+      stop_desk: params.stop_desk !== undefined ? String(params.stop_desk) : undefined,
     })
 
     const res = await fetch(`${BASE_URL}/api/v1/update/order`, {
