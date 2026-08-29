@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ecotrackShipOrder } from '@/lib/ecotrack'
+import { ensureEcotrackDraft, isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
@@ -35,10 +36,47 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'لا توجد مسودة جاهزة للإرسال' }, { status: 409 })
     }
 
-    const result = await ecotrackShipOrder(order.ecotrack_tracking)
+    let tracking = order.ecotrack_tracking
+    let recreated = false
+    let result = await ecotrackShipOrder(tracking)
+
+    if (!result.success && isInvalidEcotrackTracking(result.message)) {
+      const { data: clearedOrder, error: clearError } = await supabase
+        .from('orders')
+        .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
+        .eq('id', order_id)
+        .eq('status', 'confirmed')
+        .eq('ecotrack_status', 'draft')
+        .eq('ecotrack_tracking', tracking)
+        .is('deleted_at', null)
+        .select('id')
+        .maybeSingle()
+
+      if (clearError || !clearedOrder) {
+        return NextResponse.json(
+          { success: false, error: 'تغيّرت حالة الطلب، حدّثي الصفحة ثم حاولي مجددًا' },
+          { status: 409 }
+        )
+      }
+
+      const replacement = await ensureEcotrackDraft(supabase, order_id)
+      if (!replacement.success || !replacement.tracking) {
+        return NextResponse.json(
+          { success: false, error: replacement.error || 'تعذّر إعادة إنشاء بوليصة Ecotrack' },
+          { status: replacement.status ?? 502 }
+        )
+      }
+
+      tracking = replacement.tracking
+      recreated = true
+      result = await ecotrackShipOrder(tracking)
+    }
 
     if (!result.success) {
-      return NextResponse.json({ success: false, error: result.message }, { status: 400 })
+      return NextResponse.json(
+        { success: false, error: result.message, tracking, recreated },
+        { status: 502 }
+      )
     }
 
     const { data: savedOrder, error: dbError } = await supabase
@@ -47,7 +85,7 @@ export async function POST(req: NextRequest) {
       .eq('id', order_id)
       .eq('status', 'confirmed')
       .eq('ecotrack_status', 'draft')
-      .eq('ecotrack_tracking', order.ecotrack_tracking)
+      .eq('ecotrack_tracking', tracking)
       .is('deleted_at', null)
       .select('id')
       .maybeSingle()
@@ -65,7 +103,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, tracking, recreated })
   } catch (error) {
     console.error('Unexpected Ecotrack shipping error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

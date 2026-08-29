@@ -193,9 +193,25 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           const data = await res.json()
           if (data.success) {
             setOrders(prev => prev.map(o =>
-              o.id === orderId ? { ...o, ecotrack_status: 'shipped' as const } : o
+              o.id === orderId
+                ? {
+                    ...o,
+                    ecotrack_tracking: data.tracking ?? o.ecotrack_tracking,
+                    ecotrack_status: 'shipped' as const,
+                  }
+                : o
             ))
+            if (data.recreated) {
+              showToast('أُعيد إنشاء البوليصة القديمة وتم إرسال الطلب', 'success')
+            }
           } else {
+            if (data.recreated && data.tracking) {
+              setOrders(prev => prev.map(o =>
+                o.id === orderId
+                  ? { ...o, ecotrack_tracking: data.tracking, ecotrack_status: 'draft' as const }
+                  : o
+              ))
+            }
             showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
           }
         } catch {
