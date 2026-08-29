@@ -80,6 +80,24 @@ export const WILAYA_CODE_BY_NUMBER: Record<string, number> = {
 
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
+const API_TIMEOUT_MS = 15_000
+
+type EcotrackMutationResponse = {
+  success?: boolean
+  message?: string
+  errors?: unknown
+  tracking?: string
+}
+
+function ecotrackEndpoint(path: string) {
+  if (!BASE_URL || !TOKEN) throw new Error('Ecotrack configuration is missing')
+  return `${BASE_URL}${path}`
+}
+
+function mutationResult(res: Response, data: EcotrackMutationResponse) {
+  const message = data.message ?? (data.errors ? JSON.stringify(data.errors) : undefined)
+  return { success: res.ok && data.success === true, message }
+}
 
 function ecotrackHeaders(contentType?: string) {
   return {
@@ -123,12 +141,13 @@ export async function ecotrackGetCommunes(wilayaId: number): Promise<{
   message?: string
 }> {
   try {
-    const res = await fetch(`${BASE_URL}/api/v1/get/communes?wilaya_id=${encodeURIComponent(String(wilayaId))}`, {
+    const res = await fetch(`${ecotrackEndpoint('/api/v1/get/communes')}?wilaya_id=${encodeURIComponent(String(wilayaId))}`, {
       headers: ecotrackHeaders(),
       cache: 'no-store',
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
     const data = await res.json().catch(() => null)
-    if (!res.ok) {
+    if (!res.ok || (data && typeof data === 'object' && 'success' in data && data.success === false)) {
       return { success: false, message: 'Unable to fetch Ecotrack communes' }
     }
 
@@ -198,14 +217,17 @@ export async function ecotrackCreateOrder(params: {
       ...(params.reference && { reference: params.reference }),
     })
 
-    const res = await fetch(`${BASE_URL}/api/v1/create/order`, {
+    const res = await fetch(ecotrackEndpoint('/api/v1/create/order'), {
       method: 'POST',
       headers: ecotrackHeaders('application/x-www-form-urlencoded'),
       body,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
 
-    const data = await res.json()
-    if (data.tracking) return { success: true, tracking: data.tracking }
+    const data = await res.json() as EcotrackMutationResponse
+    if (res.ok && data.success === true && data.tracking) {
+      return { success: true, tracking: data.tracking }
+    }
     return { success: false, message: data.message ?? JSON.stringify(data.errors) }
   } catch {
     return { success: false, message: 'Network error' }
@@ -216,13 +238,14 @@ export async function ecotrackCreateOrder(params: {
 export async function ecotrackShipOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
   try {
     const body = formBody({ tracking, ask_collection: '0' })
-    const res = await fetch(`${BASE_URL}/api/v1/valid/order`, {
+    const res = await fetch(ecotrackEndpoint('/api/v1/valid/order'), {
       method: 'POST',
       headers: ecotrackHeaders('application/x-www-form-urlencoded'),
       body,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
-    const data = await res.json().catch(() => ({}))
-    return { success: res.ok, message: data.message }
+    const data = await res.json().catch(() => ({})) as EcotrackMutationResponse
+    return mutationResult(res, data)
   } catch {
     return { success: false, message: 'Network error' }
   }
@@ -255,13 +278,14 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
       stop_desk: params.stop_desk !== undefined ? String(params.stop_desk) : undefined,
     })
 
-    const res = await fetch(`${BASE_URL}/api/v1/update/order`, {
+    const res = await fetch(ecotrackEndpoint('/api/v1/update/order'), {
       method: 'POST',
       headers: ecotrackHeaders('application/x-www-form-urlencoded'),
       body,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
-    const data = await res.json().catch(() => ({}))
-    return { success: res.ok, message: data.message }
+    const data = await res.json().catch(() => ({})) as EcotrackMutationResponse
+    return mutationResult(res, data)
   } catch {
     return { success: false, message: 'Network error' }
   }
@@ -271,13 +295,14 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
 export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
   try {
     const body = formBody({ tracking })
-    const res = await fetch(`${BASE_URL}/api/v1/delete/order`, {
+    const res = await fetch(ecotrackEndpoint('/api/v1/delete/order'), {
       method: 'DELETE',
       headers: ecotrackHeaders('application/x-www-form-urlencoded'),
       body,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
-    const data = await res.json().catch(() => ({}))
-    return { success: res.ok, message: data.message }
+    const data = await res.json().catch(() => ({})) as EcotrackMutationResponse
+    return mutationResult(res, data)
   } catch {
     return { success: false, message: 'Network error' }
   }

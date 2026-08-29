@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { ecotrackDeleteOrder, ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PHONE_PATTERN = /^0[567]\d{8}$/
@@ -50,22 +50,6 @@ function productDescription(items: StoredOrderItem[]) {
     .substring(0, 255)
 }
 
-function adminClient() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing')
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceRoleKey,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    }
-  )
-}
-
 function normalizePhone(value: unknown) {
   return String(value ?? '').replace(/\s+/g, '').trim()
 }
@@ -104,7 +88,7 @@ export async function DELETE(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'معرّف الطلب غير صحيح' }, { status: 400 })
     }
 
-    const supabase = adminClient()
+    const supabase = createAdminClient()
     const permanent = req.nextUrl.searchParams.get('permanent') === '1'
 
     if (permanent) {
@@ -179,7 +163,36 @@ export async function PATCH(req: NextRequest, { params }: Props) {
 
     const body = await req.json().catch(() => ({}))
     const action = body.action
-    const supabase = adminClient()
+    const supabase = createAdminClient()
+
+    if (action === 'confirm') {
+      const { data: confirmedOrder, error } = await supabase
+        .from('orders')
+        .update({ status: 'confirmed', updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('status', 'pending')
+        .is('deleted_at', null)
+        .select('id')
+        .maybeSingle()
+
+      if (error) {
+        return NextResponse.json({ success: false, error: 'تعذّر تأكيد الطلب' }, { status: 500 })
+      }
+      if (!confirmedOrder) {
+        const { data: existingOrder } = await supabase
+          .from('orders')
+          .select('status, deleted_at')
+          .eq('id', id)
+          .maybeSingle()
+
+        if (existingOrder?.status === 'confirmed' && !existingOrder.deleted_at) {
+          return NextResponse.json({ success: true, status: 'confirmed', already_confirmed: true })
+        }
+        return NextResponse.json({ success: false, error: 'يمكن تأكيد طلب قيد الانتظار فقط' }, { status: 409 })
+      }
+
+      return NextResponse.json({ success: true, status: 'confirmed' })
+    }
 
     if (action === 'restore') {
       const { data: reservedItems, error } = await supabase.rpc('restore_order_with_stock', {
@@ -222,13 +235,32 @@ export async function PATCH(req: NextRequest, { params }: Props) {
       }
     }
 
-    const { error } = await supabase
+    let pendingUpdate = supabase
       .from('orders')
       .update({ status: 'pending', ecotrack_tracking: null, ecotrack_status: 'none' })
       .eq('id', id)
+      .eq('status', 'confirmed')
       .is('deleted_at', null)
 
-    if (error) {
+    pendingUpdate = order.ecotrack_tracking
+      ? pendingUpdate.eq('ecotrack_tracking', order.ecotrack_tracking)
+      : pendingUpdate.is('ecotrack_tracking', null)
+
+    const { data: pendingOrder, error } = await pendingUpdate
+      .select('id')
+      .maybeSingle()
+
+    if (error || !pendingOrder) {
+      if (order.ecotrack_tracking) {
+        const { error: cleanupError } = await supabase
+          .from('orders')
+          .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
+          .eq('id', id)
+          .eq('ecotrack_tracking', order.ecotrack_tracking)
+        if (cleanupError) {
+          console.error('Ecotrack draft deleted but local tracking cleanup failed:', id, cleanupError)
+        }
+      }
       return NextResponse.json({ success: false, error: 'تعذّر تحديث حالة الطلب' }, { status: 500 })
     }
 
@@ -264,7 +296,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'الملاحظة طويلة جدًا' }, { status: 400 })
     }
 
-    const supabase = adminClient()
+    const supabase = createAdminClient()
     const { data: currentOrder, error: fetchError } = await supabase
       .from('orders')
       .select(`
@@ -400,7 +432,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
 
     const nextEcotrackData = {
       client: customerName,
-      adresse: deliveryType === 'home' ? address : commune,
+      adresse: (deliveryType === 'home' ? address : commune).substring(0, 255),
       commune,
       wilaya: Number(deliveryEntry.code),
       montant: productsTotal + deliveryPrice,
@@ -411,7 +443,9 @@ export async function PUT(req: NextRequest, { params }: Props) {
     }
     const previousEcotrackData = {
       client: currentOrder.customer_name,
-      adresse: currentOrder.address ?? currentOrder.commune ?? currentOrder.wilaya_name ?? currentOrder.wilaya,
+      adresse: String(
+        currentOrder.address ?? currentOrder.commune ?? currentOrder.wilaya_name ?? currentOrder.wilaya
+      ).substring(0, 255),
       commune: currentOrder.commune ?? currentOrder.wilaya_name ?? currentOrder.wilaya,
       wilaya: WILAYA_CODE_BY_NUMBER[currentOrder.wilaya] ?? Number(currentOrder.wilaya),
       montant: Number(currentOrder.total_price),

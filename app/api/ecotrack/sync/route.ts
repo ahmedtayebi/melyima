@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
 const BASE_URL = process.env.ECOTRACK_API_URL
 const TOKEN = process.env.ECOTRACK_API_TOKEN
 const PER_PAGE = 40
+const SYNC_REQUEST_TIMEOUT_MS = 20_000
 const SYNC_COOLDOWN_SECONDS = 60 * 60
 const SYNC_COOLDOWN_KEY = 'ecotrack_sync'
 
@@ -33,24 +34,8 @@ type JobLockResult = {
   retry_after: number
 }
 
-function createServiceClient() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) return null
-
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceRoleKey,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    }
-  )
-}
-
 async function reserveSyncWindow(
-  supabase: NonNullable<ReturnType<typeof createServiceClient>>,
+  supabase: ReturnType<typeof createAdminClient>,
   force: boolean
 ) {
   if (force) return { allowed: true, skipped: false, retryAfter: 0 }
@@ -80,7 +65,16 @@ async function reserveSyncWindow(
 
 function mapStatus(ecotrackStatus: string): { status: 'delivered' | 'cancelled' | 'confirmed'; ecotrack_status: 'draft' | 'shipped' } {
   const s = ecotrackStatus.toLowerCase().trim()
-  const delivered = ['livre_non_encaisse', 'livré_non_encaissé', 'encaisse_non_paye', 'encaissé_non_payé', 'paye_et_archive', 'payé_et_archivé']
+  const delivered = [
+    'livre_non_encaisse',
+    'livré_non_encaissé',
+    'encaisse_non_paye',
+    'encaissé_non_payé',
+    'paiements_prets',
+    'paiements_prêts',
+    'paye_et_archive',
+    'payé_et_archivé',
+  ]
   const cancelled = ['retour_recu', 'retour_reçu', 'retour_archive', 'retour_archivé', 'retour_en_traitement', 'annule', 'annulé']
   if (delivered.includes(s)) return { status: 'delivered', ecotrack_status: 'shipped' }
   if (cancelled.includes(s)) return { status: 'cancelled', ecotrack_status: 'shipped' }
@@ -170,15 +164,37 @@ async function fetchAllPages(url: string): Promise<EcotrackOrder[]> {
         Accept: 'application/json',
         Authorization: `Bearer ${TOKEN}`,
       },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(SYNC_REQUEST_TIMEOUT_MS),
     })
-    const body = await res.json()
-    const rows: EcotrackOrder[] = body.data ?? body.orders ?? []
+    const body = await res.json().catch(() => null) as {
+      success?: boolean
+      message?: string
+      data?: unknown
+      orders?: unknown
+      last_page?: unknown
+      meta?: { last_page?: unknown }
+    } | null
+
+    if (!res.ok || !body || body.success === false) {
+      const detail = body?.message ? `: ${body.message}` : ''
+      throw new Error(`Ecotrack orders request failed (${res.status})${detail}`)
+    }
+
+    const rawRows = body.data ?? body.orders
+    if (rawRows !== undefined && !Array.isArray(rawRows)) {
+      throw new Error('Ecotrack orders response has an invalid data shape')
+    }
+    const rows = (rawRows ?? []) as EcotrackOrder[]
 
     if (!Array.isArray(rows) || rows.length === 0) {
       hasMore = false
     } else {
       results.push(...rows)
-      const lastPage: number = body.last_page ?? body.meta?.last_page ?? page
+      const lastPage = Number(body.last_page ?? body.meta?.last_page ?? page)
+      if (!Number.isFinite(lastPage) || lastPage < page) {
+        throw new Error('Ecotrack orders response has invalid pagination')
+      }
       if (page >= lastPage || page >= 200) hasMore = false
       else page++
     }
@@ -195,7 +211,7 @@ function isAuthorizedCron(req: Request) {
     url.searchParams.get('secret') === cronSecret
 }
 
-async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof createServiceClient>>) {
+async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>) {
   if (!BASE_URL || !TOKEN) {
     return NextResponse.json(
       { success: false, error: 'Ecotrack config missing' },
@@ -212,11 +228,10 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
     return NextResponse.json({ success: true, updated: 0, imported: 0, total: 0 })
   }
 
-  const trackingNumbers = allOrders.map(o => o.tracking).filter(Boolean)
   const { data: dbOrders, error: dbQueryError } = await supabase
     .from('orders')
-    .select('id, ecotrack_tracking, order_items!inner(id)')
-    .in('ecotrack_tracking', trackingNumbers)
+    .select('id, ecotrack_tracking')
+    .not('ecotrack_tracking', 'is', null)
     .is('deleted_at', null)
 
   if (dbQueryError) {
@@ -242,11 +257,16 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
     }
 
     for (const { status, ecotrack_status, ids } of byKey.values()) {
-      const { error } = await supabase
+      const { data: changedOrders, error } = await supabase
         .from('orders')
         .update({ status, ecotrack_status })
         .in('id', ids)
-      if (!error) updated += ids.length
+        .select('id')
+
+      if (error) {
+        throw new Error(`Failed to save synchronized order statuses: ${error.message}`)
+      }
+      updated += changedOrders?.length ?? 0
     }
   }
 
@@ -278,7 +298,7 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
 
       const matchedOrder = matches[0]
       const mapped = mapStatus(ecotrackOrder.status)
-      const { error } = await supabase
+      const { data: linkedOrder, error } = await supabase
         .from('orders')
         .update({
           ecotrack_tracking: ecotrackOrder.tracking,
@@ -287,8 +307,14 @@ async function syncEcotrackOrders(supabase: NonNullable<ReturnType<typeof create
         })
         .eq('id', matchedOrder.id)
         .is('ecotrack_tracking', null)
+        .select('id')
+        .maybeSingle()
 
-      if (!error) {
+      if (error) {
+        throw new Error(`Failed to link synchronized Ecotrack order: ${error.message}`)
+      }
+
+      if (linkedOrder) {
         linked += 1
         linkedTrackings.add(ecotrackOrder.tracking)
         const index = remainingCandidates.findIndex(candidate => candidate.id === matchedOrder.id)
@@ -306,13 +332,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
-    const supabase = createServiceClient()
-    if (!supabase) {
-      return NextResponse.json(
-        { success: false, error: 'Supabase service role missing' },
-        { status: 500 }
-      )
-    }
+    const supabase = createAdminClient()
 
     const url = new URL(req.url)
     const window = await reserveSyncWindow(supabase, url.searchParams.get('force') === '1')
@@ -337,13 +357,7 @@ export async function POST() {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
 
-    const supabase = createServiceClient()
-    if (!supabase) {
-      return NextResponse.json(
-        { success: false, error: 'Supabase service role missing' },
-        { status: 500 }
-      )
-    }
+    const supabase = createAdminClient()
 
     const window = await reserveSyncWindow(supabase, false)
     if (!window.allowed) {

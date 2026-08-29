@@ -2,7 +2,6 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, AlertTriangle, RotateCcw, ArchiveRestore } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import Modal from '@/components/ui/Modal'
 import OrderEditForm from '@/components/admin/OrderEditForm'
@@ -172,12 +171,14 @@ export default function OrdersClient({ initialOrders, products }: Props) {
       } else {
         showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
       }
+    } catch {
+      showToast('تعذّر الاتصال بالخادم أثناء إنشاء البوليصة', 'error')
     } finally {
       setLoading(orderId, 'create', false)
     }
   }
 
-  const shipOrder = (orderId: string, tracking: string) => {
+  const shipOrder = (orderId: string) => {
     setConfirmDialog({
       message: 'هل أنت متأكد؟ لا يمكن التراجع بعد الإرسال للشحن.',
       onConfirm: async () => {
@@ -187,7 +188,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           const res = await fetch('/api/ecotrack/ship', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_id: orderId, tracking }),
+            body: JSON.stringify({ order_id: orderId }),
           })
           const data = await res.json()
           if (data.success) {
@@ -197,6 +198,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           } else {
             showToast('خطأ: ' + (data.error ?? 'Unknown'), 'error')
           }
+        } catch {
+          showToast('تعذّر الاتصال بالخادم أثناء إرسال الطلب', 'error')
         } finally {
           setLoading(orderId, 'ship', false)
         }
@@ -205,17 +208,29 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   }
 
   // ── Status update ─────────────────────────────────────────
-  const updateStatus = async (orderId: string, status: OrderStatus) => {
-    const currentOrder = orders.find(o => o.id === orderId)
-    const needsDraft = status === 'confirmed' && !currentOrder?.ecotrack_tracking
-    const supabase = createClient()
-    const { error } = await supabase
-      .from('orders')
-      .update({ status })
-      .eq('id', orderId)
-    if (!error) {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o))
-      if (needsDraft) await createDraft(orderId)
+  const confirmOrder = async (orderId: string) => {
+    setLoading(orderId, 'confirm', true)
+    try {
+      const response = await fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm' }),
+      })
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        showToast('خطأ: ' + (data.error ?? 'تعذّر تأكيد الطلب'), 'error')
+        return
+      }
+
+      setOrders(current => current.map(order =>
+        order.id === orderId ? { ...order, status: 'confirmed' } : order
+      ))
+      await createDraft(orderId)
+    } catch {
+      showToast('تعذّر الاتصال بالخادم أثناء تأكيد الطلب', 'error')
+    } finally {
+      setLoading(orderId, 'confirm', false)
     }
   }
 
@@ -249,6 +264,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
           }
+        } catch {
+          showToast('تعذّر الاتصال بالخادم أثناء حذف الطلب', 'error')
         } finally {
           setLoading(order.id, 'delete-order', false)
         }
@@ -278,6 +295,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر إرجاع الطلب'), 'error')
           }
+        } catch {
+          showToast('تعذّر الاتصال بالخادم أثناء إرجاع الطلب', 'error')
         } finally {
           setLoading(order.id, 'pending', false)
         }
@@ -310,6 +329,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
       } else {
         showToast('خطأ: ' + (data.error ?? 'تعذّر استرجاع الطلب'), 'error')
       }
+    } catch {
+      showToast('تعذّر الاتصال بالخادم أثناء استرجاع الطلب', 'error')
     } finally {
       setLoading(order.id, 'restore', false)
     }
@@ -331,6 +352,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           } else {
             showToast('خطأ: ' + (data.error ?? 'تعذّر حذف الطلب'), 'error')
           }
+        } catch {
+          showToast('تعذّر الاتصال بالخادم أثناء الحذف النهائي', 'error')
         } finally {
           setLoading(order.id, 'permanent-delete', false)
         }
@@ -401,7 +424,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                 {order.ecotrack_tracking}
               </span>
               <button
-                onClick={() => shipOrder(order.id, order.ecotrack_tracking!)}
+                onClick={() => shipOrder(order.id)}
                 disabled={ecotrackLoading[`${order.id}-ship`]}
                 className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg"
                 style={{ backgroundColor: '#8B1A2E' }}
@@ -597,10 +620,12 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                         </>
                       ) : order.status === 'pending' ? (
                         <button
-                          onClick={() => updateStatus(order.id, 'confirmed')}
-                          className="text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90"
+                          onClick={() => confirmOrder(order.id)}
+                          disabled={ecotrackLoading[`${order.id}-confirm`]}
+                          className="inline-flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90 disabled:opacity-50"
                           style={{ backgroundColor: '#1A1410' }}
                         >
+                          {ecotrackLoading[`${order.id}-confirm`] && <Loader2 size={13} className="animate-spin" />}
                           تأكيد الطلب
                         </button>
                       ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
@@ -791,10 +816,12 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                 </>
               ) : order.status === 'pending' ? (
                 <button
-                  onClick={() => updateStatus(order.id, 'confirmed')}
-                  className="mr-auto text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90"
+                  onClick={() => confirmOrder(order.id)}
+                  disabled={ecotrackLoading[`${order.id}-confirm`]}
+                  className="mr-auto inline-flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90 disabled:opacity-50"
                   style={{ backgroundColor: '#1A1410' }}
                 >
+                  {ecotrackLoading[`${order.id}-confirm`] && <Loader2 size={12} className="animate-spin" />}
                   تأكيد الطلب
                 </button>
               ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
