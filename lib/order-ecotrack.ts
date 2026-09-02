@@ -6,11 +6,36 @@ import {
   WILAYA_CODES,
   WILAYA_CODE_BY_NUMBER,
 } from '@/lib/ecotrack'
+import {
+  fetchAllEcotrackOrders,
+  findEcotrackMatch,
+  mapEcotrackStatus,
+  type MappedEcotrackStatus,
+} from '@/lib/ecotrack-sync'
 
 export type EnsureDraftResult = {
   success: boolean
   tracking?: string
   alreadyExists?: boolean
+  error?: string
+  status?: number
+}
+
+export type RecoverTrackingResult = {
+  success: boolean
+  recovered: boolean
+  ambiguous?: boolean
+  tracking?: string
+  mapped?: MappedEcotrackStatus
+  error?: string
+  status?: number
+}
+
+export type RemoveDraftResult = {
+  success: boolean
+  tracking: string
+  alreadyMissing?: boolean
+  relinked?: boolean
   error?: string
   status?: number
 }
@@ -42,6 +67,154 @@ export function isInvalidEcotrackTracking(message: string | undefined) {
   return mentionsTracking && meansMissing
 }
 
+export async function recoverEcotrackTracking(
+  supabase: SupabaseClient,
+  orderId: string
+): Promise<RecoverTrackingResult> {
+  const { data: order, error: orderError } = await supabase
+    .from('orders')
+    .select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking, created_at')
+    .eq('id', orderId)
+    .is('deleted_at', null)
+    .single()
+
+  if (orderError || !order) {
+    return { success: false, recovered: false, error: 'الطلب غير موجود', status: 404 }
+  }
+
+  const { data: linkedOrders, error: linkedError } = await supabase
+    .from('orders')
+    .select('ecotrack_tracking')
+    .neq('id', orderId)
+    .not('ecotrack_tracking', 'is', null)
+    .is('deleted_at', null)
+
+  if (linkedError) {
+    return { success: false, recovered: false, error: 'تعذّر التحقق من أرقام التتبع', status: 500 }
+  }
+
+  let ecotrackOrders
+  try {
+    ecotrackOrders = await fetchAllEcotrackOrders()
+  } catch (error) {
+    console.error('Failed to recover changed Ecotrack tracking:', error)
+    return { success: false, recovered: false, error: 'تعذّر فحص طلبات Ecotrack', status: 502 }
+  }
+
+  const unavailableTrackings = new Set(
+    (linkedOrders ?? [])
+      .map(linkedOrder => linkedOrder.ecotrack_tracking)
+      .filter((tracking): tracking is string => Boolean(tracking))
+  )
+  const { match, ambiguous } = findEcotrackMatch(ecotrackOrders, order, unavailableTrackings)
+
+  if (ambiguous) {
+    return {
+      success: true,
+      recovered: false,
+      ambiguous: true,
+      error: 'وجدنا أكثر من بوليصة مشابهة في Ecotrack؛ لم نربط أيًا منها لتجنب الخطأ',
+      status: 409,
+    }
+  }
+  if (!match) return { success: true, recovered: false }
+
+  const mapped = mapEcotrackStatus(match.status)
+  let update = supabase
+    .from('orders')
+    .update({
+      ecotrack_tracking: match.tracking,
+      ecotrack_status: mapped.ecotrack_status,
+      status: mapped.status,
+    })
+    .eq('id', orderId)
+    .eq('status', 'confirmed')
+    .is('deleted_at', null)
+
+  update = order.ecotrack_tracking
+    ? update.eq('ecotrack_tracking', order.ecotrack_tracking)
+    : update.is('ecotrack_tracking', null)
+
+  const { data: savedOrder, error: saveError } = await update.select('id').maybeSingle()
+  if (saveError || !savedOrder) {
+    return {
+      success: false,
+      recovered: false,
+      error: 'تغيّرت حالة الطلب أثناء إصلاح رقم التتبع، حدّثي الصفحة ثم حاولي مجددًا',
+      status: 409,
+    }
+  }
+
+  return { success: true, recovered: true, tracking: match.tracking, mapped }
+}
+
+export async function removeEcotrackDraft(
+  supabase: SupabaseClient,
+  orderId: string,
+  currentTracking: string
+): Promise<RemoveDraftResult> {
+  const firstAttempt = await ecotrackDeleteOrder(currentTracking)
+  if (firstAttempt.success) return { success: true, tracking: currentTracking }
+  if (!isInvalidEcotrackTracking(firstAttempt.message)) {
+    return {
+      success: false,
+      tracking: currentTracking,
+      error: firstAttempt.message || 'تعذّر حذف مسودة Ecotrack',
+      status: 502,
+    }
+  }
+
+  const recovery = await recoverEcotrackTracking(supabase, orderId)
+  if (!recovery.success || recovery.ambiguous) {
+    return {
+      success: false,
+      tracking: currentTracking,
+      error: recovery.error || 'تعذّر إصلاح رقم تتبع Ecotrack',
+      status: recovery.status ?? 502,
+    }
+  }
+  if (!recovery.recovered || !recovery.tracking || !recovery.mapped) {
+    return { success: true, tracking: currentTracking, alreadyMissing: true }
+  }
+  if (recovery.mapped.ecotrack_status === 'shipped') {
+    return {
+      success: false,
+      tracking: recovery.tracking,
+      relinked: true,
+      error: 'تم العثور على البوليصة في Ecotrack وهي مُرسلة؛ لا يمكن حذفها كمسودة',
+      status: 409,
+    }
+  }
+  if (recovery.tracking === currentTracking) {
+    return {
+      success: false,
+      tracking: currentTracking,
+      error: firstAttempt.message || 'Ecotrack رفض حذف هذه المسودة',
+      status: 502,
+    }
+  }
+
+  const secondAttempt = await ecotrackDeleteOrder(recovery.tracking)
+  const disappearedDuringRecovery =
+    !secondAttempt.success && isInvalidEcotrackTracking(secondAttempt.message)
+  if (!secondAttempt.success && !disappearedDuringRecovery) {
+    return {
+      success: false,
+      tracking: recovery.tracking,
+      relinked: true,
+      error: secondAttempt.message || 'تعذّر حذف مسودة Ecotrack',
+      status: 502,
+    }
+  }
+
+  return {
+    success: true,
+    tracking: recovery.tracking,
+    relinked: true,
+    alreadyMissing: disappearedDuringRecovery,
+  }
+}
+
 export async function ensureEcotrackDraft(
   supabase: SupabaseClient,
   orderId: string
@@ -62,6 +235,14 @@ export async function ensureEcotrackDraft(
     return { success: false, error: 'يجب أن يكون الطلب مؤكدًا قبل إنشاء البوليصة', status: 409 }
   }
   if (order.ecotrack_tracking) {
+    if (order.ecotrack_status !== 'draft') {
+      return {
+        success: false,
+        error: 'حالة بوليصة Ecotrack غير متسقة، شغّلي المزامنة ثم حدّثي الصفحة',
+        status: 409,
+      }
+    }
+
     return {
       success: true,
       tracking: order.ecotrack_tracking,

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ecotrackDeleteOrder } from '@/lib/ecotrack'
-import { isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
+import { removeEcotrackDraft } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
@@ -33,18 +32,19 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'لا يمكن حذف هذه البوليصة' }, { status: 409 })
     }
 
-    const result = await ecotrackDeleteOrder(order.ecotrack_tracking)
-
-    const alreadyMissing = !result.success && isInvalidEcotrackTracking(result.message)
-    if (!result.success && !alreadyMissing) {
-      return NextResponse.json({ success: false, error: result.message }, { status: 400 })
+    const result = await removeEcotrackDraft(supabase, order_id, order.ecotrack_tracking)
+    if (!result.success) {
+      return NextResponse.json(
+        { success: false, error: result.error },
+        { status: result.status ?? 502 }
+      )
     }
 
     const { data: savedOrder, error: dbError } = await supabase
       .from('orders')
       .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
       .eq('id', order_id)
-      .eq('ecotrack_tracking', order.ecotrack_tracking)
+      .eq('ecotrack_tracking', result.tracking)
       .eq('ecotrack_status', 'draft')
       .select('id')
       .maybeSingle()
@@ -54,7 +54,11 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: true, pending_cleanup: true })
     }
 
-    return NextResponse.json({ success: true, already_deleted: alreadyMissing })
+    return NextResponse.json({
+      success: true,
+      already_deleted: result.alreadyMissing,
+      relinked: result.relinked,
+    })
   } catch (error) {
     console.error('Unexpected Ecotrack draft deletion error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

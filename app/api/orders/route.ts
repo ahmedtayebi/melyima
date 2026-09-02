@@ -1,4 +1,5 @@
 import { after, NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 import { sendNewOrderNotification } from '@/lib/order-notification-email'
@@ -53,21 +54,32 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const {
       customer_name, phone, phone2, wilaya, commune,
-      delivery_type, address, notes, items,
+      delivery_type, address, notes, items, request_id,
     } = body
 
     // ── Validate ──────────────────────────────────────────────
     const safeItems = Array.isArray(items) ? (items as Partial<IncomingOrderItem>[]) : []
+    const customerName = String(customer_name ?? '').trim()
     const phoneNormalized = normalizePhone(phone)
     const phone2Normalized = phone2 ? normalizePhone(phone2) : null
     const wilayaCode = normalizeWilayaCode(wilaya)
+    const communeNormalized = String(commune ?? '').trim()
+    const addressNormalized = String(address ?? '').trim()
+    const notesNormalized = String(notes ?? '').trim()
+    const requestId = UUID_PATTERN.test(String(request_id ?? ''))
+      ? String(request_id)
+      : randomUUID()
 
     if (
-      !customer_name?.trim() ||
+      !customerName ||
+      customerName.length > 100 ||
       !phoneNormalized ||
       !/^0[567]\d{8}$/.test(phoneNormalized) ||
       (phone2Normalized && !/^0[567]\d{8}$/.test(phone2Normalized)) ||
       !wilayaCode ||
+      communeNormalized.length > 150 ||
+      addressNormalized.length > 500 ||
+      notesNormalized.length > 1000 ||
       safeItems.length === 0 ||
       safeItems.length > MAX_ITEMS ||
       safeItems.some((item) =>
@@ -88,6 +100,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const itemKeys = safeItems.map(item =>
+      `${String(item.product_id)}:${String(item.color_id)}:${String(item.size_id)}`
+    )
+    if (new Set(itemKeys).size !== itemKeys.length) {
+      return NextResponse.json(
+        { success: false, error: 'نفس المنتج واللون والمقاس مكرر داخل الطلب' },
+        { status: 400 }
+      )
+    }
+
     if (!['home', 'office'].includes(delivery_type)) {
       return NextResponse.json(
         { success: false, error: 'نوع التوصيل غير صحيح' },
@@ -103,14 +125,14 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (delivery_type === 'home' && (!String(commune ?? '').trim() || !String(address ?? '').trim())) {
+    if (delivery_type === 'home' && (!communeNormalized || !addressNormalized)) {
       return NextResponse.json(
         { success: false, error: 'العنوان والبلدية مطلوبان للتوصيل للمنزل' },
         { status: 400 }
       )
     }
 
-    if (delivery_type === 'office' && !String(commune ?? '').trim()) {
+    if (delivery_type === 'office' && !communeNormalized) {
       return NextResponse.json(
         { success: false, error: 'يرجى اختيار مكتب الاستلام' },
         { status: 400 }
@@ -145,21 +167,29 @@ export async function POST(req: NextRequest) {
       quantity: Number(item.quantity),
     }))
 
-    const { data: orderId, error: orderError } = await supabase.rpc('create_order_with_stock', {
-      p_customer_name: String(customer_name).trim(),
+    const { data: orderResult, error: orderError } = await supabase.rpc('create_order_with_stock', {
+      p_customer_name: customerName,
       p_phone: phoneNormalized,
       p_phone2: phone2Normalized,
       p_wilaya: wilayaCode,
       p_wilaya_name: deliveryEntry.name,
       p_delivery_type: String(delivery_type),
       p_delivery_price: deliveryPrice,
-      p_address: address ? String(address).trim() : null,
-      p_commune: commune ? String(commune).trim() : null,
-      p_notes: notes ? String(notes).trim() : null,
+      p_address: delivery_type === 'home' ? addressNormalized : null,
+      p_commune: communeNormalized,
+      p_notes: notesNormalized || null,
       p_items: rpcItems,
+      p_request_id: requestId,
     })
 
-    if (orderError || !orderId) {
+    const orderId = orderResult && typeof orderResult === 'object' && 'order_id' in orderResult
+      ? String(orderResult.order_id)
+      : ''
+    const orderCreated = orderResult && typeof orderResult === 'object' && 'created' in orderResult
+      ? orderResult.created !== false
+      : false
+
+    if (orderError || !UUID_PATTERN.test(orderId)) {
       console.error('Order RPC error:', orderError)
       const mapped = getOrderErrorMessage(orderError?.message ?? '')
       return NextResponse.json(
@@ -168,14 +198,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const savedOrderId = String(orderId)
-    after(async () => {
-      try {
-        await sendNewOrderNotification(savedOrderId)
-      } catch (emailError) {
-        console.error('New order notification email failed:', emailError)
-      }
-    })
+    const savedOrderId = orderId
+    if (orderCreated) {
+      after(async () => {
+        try {
+          await sendNewOrderNotification(savedOrderId)
+        } catch (emailError) {
+          console.error('New order notification email failed:', emailError)
+        }
+      })
+    }
 
     return NextResponse.json({ success: true, order_id: savedOrderId })
   } catch (err) {

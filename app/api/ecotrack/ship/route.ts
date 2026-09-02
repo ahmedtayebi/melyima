@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ecotrackShipOrder } from '@/lib/ecotrack'
-import { ensureEcotrackDraft, isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
+import {
+  ensureEcotrackDraft,
+  isInvalidEcotrackTracking,
+  recoverEcotrackTracking,
+} from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
@@ -30,7 +34,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'الطلب موجود في المحذوفات' }, { status: 409 })
     }
     if (order.ecotrack_status === 'shipped') {
-      return NextResponse.json({ success: true, already_shipped: true })
+      return NextResponse.json({
+        success: true,
+        already_shipped: true,
+        tracking: order.ecotrack_tracking,
+      })
     }
     if (order.status !== 'confirmed' || order.ecotrack_status !== 'draft' || !order.ecotrack_tracking) {
       return NextResponse.json({ success: false, error: 'لا توجد مسودة جاهزة للإرسال' }, { status: 409 })
@@ -38,43 +46,76 @@ export async function POST(req: NextRequest) {
 
     let tracking = order.ecotrack_tracking
     let recreated = false
+    let relinked = false
     let result = await ecotrackShipOrder(tracking)
 
     if (!result.success && isInvalidEcotrackTracking(result.message)) {
-      const { data: clearedOrder, error: clearError } = await supabase
-        .from('orders')
-        .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
-        .eq('id', order_id)
-        .eq('status', 'confirmed')
-        .eq('ecotrack_status', 'draft')
-        .eq('ecotrack_tracking', tracking)
-        .is('deleted_at', null)
-        .select('id')
-        .maybeSingle()
-
-      if (clearError || !clearedOrder) {
+      const recovery = await recoverEcotrackTracking(supabase, order_id)
+      if (!recovery.success || recovery.ambiguous) {
         return NextResponse.json(
-          { success: false, error: 'تغيّرت حالة الطلب، حدّثي الصفحة ثم حاولي مجددًا' },
-          { status: 409 }
+          { success: false, error: recovery.error || 'تعذّر إصلاح رقم تتبع Ecotrack' },
+          { status: recovery.status ?? 502 }
         )
       }
 
-      const replacement = await ensureEcotrackDraft(supabase, order_id)
-      if (!replacement.success || !replacement.tracking) {
-        return NextResponse.json(
-          { success: false, error: replacement.error || 'تعذّر إعادة إنشاء بوليصة Ecotrack' },
-          { status: replacement.status ?? 502 }
-        )
-      }
+      if (recovery.recovered && recovery.tracking && recovery.mapped) {
+        tracking = recovery.tracking
+        relinked = true
 
-      tracking = replacement.tracking
-      recreated = true
-      result = await ecotrackShipOrder(tracking)
+        if (recovery.mapped.ecotrack_status === 'shipped') {
+          return NextResponse.json({
+            success: true,
+            already_shipped: true,
+            tracking,
+            relinked,
+            status: recovery.mapped.status,
+          })
+        }
+
+        if (tracking === order.ecotrack_tracking) {
+          return NextResponse.json(
+            { success: false, error: result.message || 'Ecotrack رفض إرسال هذه البوليصة' },
+            { status: 502 }
+          )
+        }
+
+        result = await ecotrackShipOrder(tracking)
+      } else {
+        const { data: clearedOrder, error: clearError } = await supabase
+          .from('orders')
+          .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
+          .eq('id', order_id)
+          .eq('status', 'confirmed')
+          .eq('ecotrack_status', 'draft')
+          .eq('ecotrack_tracking', tracking)
+          .is('deleted_at', null)
+          .select('id')
+          .maybeSingle()
+
+        if (clearError || !clearedOrder) {
+          return NextResponse.json(
+            { success: false, error: 'تغيّرت حالة الطلب، حدّثي الصفحة ثم حاولي مجددًا' },
+            { status: 409 }
+          )
+        }
+
+        const replacement = await ensureEcotrackDraft(supabase, order_id)
+        if (!replacement.success || !replacement.tracking) {
+          return NextResponse.json(
+            { success: false, error: replacement.error || 'تعذّر إعادة إنشاء بوليصة Ecotrack' },
+            { status: replacement.status ?? 502 }
+          )
+        }
+
+        tracking = replacement.tracking
+        recreated = true
+        result = await ecotrackShipOrder(tracking)
+      }
     }
 
     if (!result.success) {
       return NextResponse.json(
-        { success: false, error: result.message, tracking, recreated },
+        { success: false, error: result.message, tracking, recreated, relinked },
         { status: 502 }
       )
     }
@@ -99,11 +140,11 @@ export async function POST(req: NextRequest) {
 
       if (latestOrder?.ecotrack_status !== 'shipped') {
         console.error('Ecotrack order shipped but local status update failed:', order_id, dbError)
-        return NextResponse.json({ success: true, pending_sync: true })
+        return NextResponse.json({ success: true, pending_sync: true, tracking, recreated, relinked })
       }
     }
 
-    return NextResponse.json({ success: true, tracking, recreated })
+    return NextResponse.json({ success: true, tracking, recreated, relinked })
   } catch (error) {
     console.error('Unexpected Ecotrack shipping error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

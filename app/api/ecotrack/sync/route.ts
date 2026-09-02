@@ -1,33 +1,18 @@
 import { NextResponse } from 'next/server'
+import {
+  ecotrackMatchKind,
+  fetchAllEcotrackOrders,
+  mapEcotrackStatus,
+  type LocalOrderCandidate,
+} from '@/lib/ecotrack-sync'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
-const BASE_URL = process.env.ECOTRACK_API_URL
-const TOKEN = process.env.ECOTRACK_API_TOKEN
-const PER_PAGE = 40
-const SYNC_REQUEST_TIMEOUT_MS = 20_000
 const SYNC_COOLDOWN_SECONDS = 60 * 60
 const SYNC_COOLDOWN_KEY = 'ecotrack_sync'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
-
-type EcotrackOrder = {
-  tracking: string
-  reference?: string | null
-  status: string
-  client?: string | null
-  nom_client?: string | null
-  phone?: string | null
-  telephone?: string | null
-  phone_2?: string | null
-  telephone_2?: string | null
-  wilaya_id: number
-  stop_desk: number
-  montant: string | number
-  adresse?: string | null
-  created_at?: string | null
-}
 
 type JobLockResult = {
   allowed: boolean
@@ -63,146 +48,6 @@ async function reserveSyncWindow(
   }
 }
 
-function mapStatus(ecotrackStatus: string): { status: 'delivered' | 'cancelled' | 'confirmed'; ecotrack_status: 'draft' | 'shipped' } {
-  const s = ecotrackStatus.toLowerCase().trim()
-  const delivered = [
-    'livre_non_encaisse',
-    'livré_non_encaissé',
-    'encaisse_non_paye',
-    'encaissé_non_payé',
-    'paiements_prets',
-    'paiements_prêts',
-    'paye_et_archive',
-    'payé_et_archivé',
-  ]
-  const cancelled = ['retour_recu', 'retour_reçu', 'retour_archive', 'retour_archivé', 'retour_en_traitement', 'annule', 'annulé']
-  if (delivered.includes(s)) return { status: 'delivered', ecotrack_status: 'shipped' }
-  if (cancelled.includes(s)) return { status: 'cancelled', ecotrack_status: 'shipped' }
-  if (s === 'prete_a_expedier' || s === 'prête_à_expédier') return { status: 'confirmed', ecotrack_status: 'draft' }
-  return { status: 'confirmed', ecotrack_status: 'shipped' }
-}
-
-type LocalOrderCandidate = {
-  id: string
-  customer_name: string
-  phone: string
-  phone2: string | null
-  wilaya: string
-  total_price: number
-  ecotrack_tracking: string | null
-}
-
-function normalizePhone(value: string | null | undefined) {
-  return String(value ?? '').replace(/\D/g, '').replace(/^213/, '0')
-}
-
-function normalizeName(value: string | null | undefined) {
-  return String(value ?? '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-}
-
-function getEcotrackClient(order: EcotrackOrder) {
-  return order.client ?? order.nom_client ?? ''
-}
-
-function getEcotrackPhone(order: EcotrackOrder) {
-  return normalizePhone(order.phone ?? order.telephone)
-}
-
-function getEcotrackSecondPhone(order: EcotrackOrder) {
-  return normalizePhone(order.phone_2 ?? order.telephone_2)
-}
-
-function getEcotrackAmount(order: EcotrackOrder) {
-  const amount = Number(String(order.montant).replace(/[^\d.-]/g, ''))
-  return Number.isFinite(amount) ? amount : null
-}
-
-function namesLookRelated(a: string, b: string) {
-  const left = normalizeName(a)
-  const right = normalizeName(b)
-  if (!left || !right) return false
-  if (left === right || left.includes(right) || right.includes(left)) return true
-
-  const leftWords = new Set(left.split(/\s+/).filter(word => word.length >= 3))
-  const rightWords = right.split(/\s+/).filter(word => word.length >= 3)
-  return rightWords.some(word => leftWords.has(word))
-}
-
-function isFallbackMatch(ecotrackOrder: EcotrackOrder, localOrder: LocalOrderCandidate) {
-  const ecoPhone = getEcotrackPhone(ecotrackOrder)
-  const ecoSecondPhone = getEcotrackSecondPhone(ecotrackOrder)
-  const localPhone = normalizePhone(localOrder.phone)
-  const localSecondPhone = normalizePhone(localOrder.phone2)
-  const phoneMatches =
-    (!!ecoPhone && (ecoPhone === localPhone || ecoPhone === localSecondPhone)) ||
-    (!!ecoSecondPhone && (ecoSecondPhone === localPhone || ecoSecondPhone === localSecondPhone))
-
-  if (!phoneMatches) return false
-  if (Number(ecotrackOrder.wilaya_id) !== Number(localOrder.wilaya)) return false
-
-  const ecoAmount = getEcotrackAmount(ecotrackOrder)
-  if (ecoAmount === null || Math.abs(ecoAmount - Number(localOrder.total_price)) > 1) return false
-
-  return namesLookRelated(getEcotrackClient(ecotrackOrder), localOrder.customer_name)
-}
-
-async function fetchAllPages(url: string): Promise<EcotrackOrder[]> {
-  const results: EcotrackOrder[] = []
-  let page = 1
-  let hasMore = true
-
-  while (hasMore) {
-    const pageUrl = new URL(url)
-    pageUrl.searchParams.set('page', String(page))
-    const res = await fetch(pageUrl, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${TOKEN}`,
-      },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(SYNC_REQUEST_TIMEOUT_MS),
-    })
-    const body = await res.json().catch(() => null) as {
-      success?: boolean
-      message?: string
-      data?: unknown
-      orders?: unknown
-      last_page?: unknown
-      meta?: { last_page?: unknown }
-    } | null
-
-    if (!res.ok || !body || body.success === false) {
-      const detail = body?.message ? `: ${body.message}` : ''
-      throw new Error(`Ecotrack orders request failed (${res.status})${detail}`)
-    }
-
-    const rawRows = body.data ?? body.orders
-    if (rawRows !== undefined && !Array.isArray(rawRows)) {
-      throw new Error('Ecotrack orders response has an invalid data shape')
-    }
-    const rows = (rawRows ?? []) as EcotrackOrder[]
-
-    if (!Array.isArray(rows) || rows.length === 0) {
-      hasMore = false
-    } else {
-      results.push(...rows)
-      const lastPage = Number(body.last_page ?? body.meta?.last_page ?? page)
-      if (!Number.isFinite(lastPage) || lastPage < page) {
-        throw new Error('Ecotrack orders response has invalid pagination')
-      }
-      if (page >= lastPage || page >= 200) hasMore = false
-      else page++
-    }
-  }
-
-  return results
-}
-
 function isAuthorizedCron(req: Request) {
   const cronSecret = process.env.CRON_SECRET
   if (!cronSecret) return false
@@ -212,17 +57,8 @@ function isAuthorizedCron(req: Request) {
 }
 
 async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>) {
-  if (!BASE_URL || !TOKEN) {
-    return NextResponse.json(
-      { success: false, error: 'Ecotrack config missing' },
-      { status: 500 }
-    )
-  }
-
   // ── Fetch all orders from Ecotrack ────────────────────────
-  const allOrders = await fetchAllPages(
-    `${BASE_URL}/api/v1/get/orders?per_page=${PER_PAGE}`
-  )
+  const allOrders = await fetchAllEcotrackOrders()
 
   if (allOrders.length === 0) {
     return NextResponse.json({ success: true, updated: 0, imported: 0, total: 0 })
@@ -230,7 +66,7 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
 
   const { data: dbOrders, error: dbQueryError } = await supabase
     .from('orders')
-    .select('id, ecotrack_tracking')
+    .select('id, status, ecotrack_tracking, ecotrack_status')
     .not('ecotrack_tracking', 'is', null)
     .is('deleted_at', null)
 
@@ -249,7 +85,10 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
       if (!order.ecotrack_tracking) continue
       const rawStatus = ecotrackMap.get(order.ecotrack_tracking)
       if (!rawStatus) continue
-      const mapped = mapStatus(rawStatus)
+      const mapped = mapEcotrackStatus(rawStatus)
+      if (order.status === 'cancelled') continue
+      if (order.status === 'delivered' && mapped.status === 'confirmed') continue
+      if (order.status === mapped.status && order.ecotrack_status === mapped.ecotrack_status) continue
       const key = `${mapped.status}|${mapped.ecotrack_status}`
       const group = byKey.get(key)
       if (group) group.ids.push(order.id)
@@ -279,9 +118,10 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
   if (unlinkedEcotrackOrders.length > 0) {
     const { data: candidates, error: candidatesError } = await supabase
       .from('orders')
-      .select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking')
+      .select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking, created_at')
       .is('ecotrack_tracking', null)
       .is('deleted_at', null)
+      .eq('status', 'confirmed')
 
     if (candidatesError) {
       return NextResponse.json({ success: false, error: 'DB fallback query failed' }, { status: 500 })
@@ -289,38 +129,66 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
 
     const remainingCandidates = [...((candidates ?? []) as LocalOrderCandidate[])]
 
-    for (const ecotrackOrder of unlinkedEcotrackOrders) {
-      const matches = remainingCandidates.filter(candidate =>
-        isFallbackMatch(ecotrackOrder, candidate)
-      )
+    const linkUniqueMatches = async (kind: 'reference' | 'fallback') => {
+      const matchSets = unlinkedEcotrackOrders.flatMap(ecotrackOrder => {
+        if (linkedTrackings.has(ecotrackOrder.tracking)) return []
 
-      if (matches.length !== 1) continue
+        const referenceMatches = remainingCandidates.filter(candidate =>
+          ecotrackMatchKind(ecotrackOrder, candidate) === 'reference'
+        )
+        if (kind === 'fallback' && referenceMatches.length > 0) return []
 
-      const matchedOrder = matches[0]
-      const mapped = mapStatus(ecotrackOrder.status)
-      const { data: linkedOrder, error } = await supabase
-        .from('orders')
-        .update({
-          ecotrack_tracking: ecotrackOrder.tracking,
-          ecotrack_status: mapped.ecotrack_status,
-          status: mapped.status,
-        })
-        .eq('id', matchedOrder.id)
-        .is('ecotrack_tracking', null)
-        .select('id')
-        .maybeSingle()
+        const matches = kind === 'reference'
+          ? referenceMatches
+          : remainingCandidates.filter(candidate =>
+              ecotrackMatchKind(ecotrackOrder, candidate) === 'fallback'
+            )
+        return matches.length > 0 ? [{ ecotrackOrder, matches }] : []
+      })
 
-      if (error) {
-        throw new Error(`Failed to link synchronized Ecotrack order: ${error.message}`)
+      const candidateUseCount = new Map<string, number>()
+      for (const matchSet of matchSets) {
+        for (const candidate of matchSet.matches) {
+          candidateUseCount.set(candidate.id, (candidateUseCount.get(candidate.id) ?? 0) + 1)
+        }
       }
 
-      if (linkedOrder) {
-        linked += 1
-        linkedTrackings.add(ecotrackOrder.tracking)
-        const index = remainingCandidates.findIndex(candidate => candidate.id === matchedOrder.id)
-        if (index !== -1) remainingCandidates.splice(index, 1)
+      for (const { ecotrackOrder, matches } of matchSets) {
+        if (matches.length !== 1) continue
+        const matchedCandidate = matches[0]
+        if (candidateUseCount.get(matchedCandidate.id) !== 1) continue
+        if (linkedTrackings.has(ecotrackOrder.tracking)) continue
+        if (!remainingCandidates.some(candidate => candidate.id === matchedCandidate.id)) continue
+
+        const mapped = mapEcotrackStatus(ecotrackOrder.status)
+        const { data: linkedOrder, error } = await supabase
+          .from('orders')
+          .update({
+            ecotrack_tracking: ecotrackOrder.tracking,
+            ecotrack_status: mapped.ecotrack_status,
+            status: mapped.status,
+          })
+          .eq('id', matchedCandidate.id)
+          .eq('status', 'confirmed')
+          .is('ecotrack_tracking', null)
+          .select('id')
+          .maybeSingle()
+
+        if (error) {
+          throw new Error(`Failed to link synchronized Ecotrack order: ${error.message}`)
+        }
+
+        if (linkedOrder) {
+          linked += 1
+          linkedTrackings.add(ecotrackOrder.tracking)
+          const index = remainingCandidates.findIndex(candidate => candidate.id === matchedCandidate.id)
+          if (index !== -1) remainingCandidates.splice(index, 1)
+        }
       }
     }
+
+    await linkUniqueMatches('reference')
+    await linkUniqueMatches('fallback')
   }
 
   return NextResponse.json({ success: true, updated, linked, imported: 0, total: allOrders.length })

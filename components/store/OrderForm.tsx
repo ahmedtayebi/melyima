@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useCartStore } from '@/lib/cart-store'
@@ -48,6 +48,7 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
   const [loadingOffices, setLoadingOffices] = useState(false)
   const [officeError, setOfficeError] = useState<string | null>(null)
   const [officesLoadedForWilaya, setOfficesLoadedForWilaya] = useState<string | null>(null)
+  const requestIdRef = useRef<string | null>(null)
 
   const selectedWilaya = useMemo(
     () => DELIVERY_PRICES.find(w => w.code === formData.wilaya),
@@ -177,6 +178,7 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
     setSubmitError(null)
 
     try {
+      requestIdRef.current ??= crypto.randomUUID()
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -194,10 +196,14 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
           commune: formData.commune || null,
           notes: formData.notes.trim() || null,
           items,
+          request_id: requestIdRef.current,
         }),
       })
       const result = await res.json()
-      if (!res.ok || !result.success) throw new Error(result.error || 'حدث خطأ، حاولي مجدداً')
+      if (!res.ok || !result.success) {
+        if (res.status >= 400 && res.status < 500) requestIdRef.current = null
+        throw new Error(result.error || 'حدث خطأ، حاولي مجدداً')
+      }
       setOrderId(result.order_id)
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'حدث خطأ في الاتصال، حاولي مجدداً')
@@ -453,6 +459,7 @@ export default function OrderForm({ onSuccess }: OrderFormProps) {
           onChange={e => setFormData(d => ({ ...d, notes: e.target.value }))}
           placeholder="أي تعليمات خاصة للطلب..."
           rows={2}
+          maxLength={1000}
           className="w-full bg-white border border-border rounded-xl px-4 py-3 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 text-right resize-none"
         />
       </div>

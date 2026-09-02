@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
-import { ecotrackDeleteOrder, ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
+import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
-import { isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
+import {
+  ensureEcotrackDraft,
+  isInvalidEcotrackTracking,
+  recoverEcotrackTracking,
+  removeEcotrackDraft,
+} from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -71,6 +76,9 @@ function orderError(message: string) {
   if (message.includes('order_not_found')) {
     return { status: 404, error: 'الطلب غير موجود' }
   }
+  if (message.includes('order_changed')) {
+    return { status: 409, error: 'تغيّر الطلب أثناء العملية، حدّثي الصفحة ثم حاولي مجددًا' }
+  }
   return { status: 400, error: 'تعذّر تنفيذ العملية على الطلب' }
 }
 
@@ -120,26 +128,40 @@ export async function DELETE(req: NextRequest, { params }: Props) {
       )
     }
 
-    if (order.ecotrack_tracking) {
-      const ecotrackResult = await ecotrackDeleteOrder(order.ecotrack_tracking)
-      if (!ecotrackResult.success && !isInvalidEcotrackTracking(ecotrackResult.message)) {
+    let activeTracking = order.ecotrack_tracking
+    if (activeTracking) {
+      const ecotrackResult = await removeEcotrackDraft(supabase, id, activeTracking)
+      if (!ecotrackResult.success) {
         return NextResponse.json(
-          { success: false, error: ecotrackResult.message || 'تعذّر حذف البوليصة من شركة التوصيل' },
-          { status: 502 }
+          { success: false, error: ecotrackResult.error || 'تعذّر حذف البوليصة من شركة التوصيل' },
+          { status: ecotrackResult.status ?? 502 }
         )
       }
+      activeTracking = ecotrackResult.tracking
     }
 
     const { data: restoredItems, error } = await supabase.rpc('delete_order_with_stock', {
       p_order_id: id,
+      p_expected_tracking: activeTracking,
     })
 
     if (error) {
-      if (order.ecotrack_tracking) {
+      const { data: latestOrder } = await supabase
+        .from('orders')
+        .select('deleted_at')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (latestOrder?.deleted_at) {
+        return NextResponse.json({ success: true, already_deleted: true, restored_items: 0 })
+      }
+
+      if (activeTracking) {
         await supabase
           .from('orders')
           .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
           .eq('id', id)
+          .eq('ecotrack_tracking', activeTracking)
       }
       const mapped = orderError(error.message)
       return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
@@ -200,6 +222,16 @@ export async function PATCH(req: NextRequest, { params }: Props) {
         p_order_id: id,
       })
       if (error) {
+        const { data: latestOrder } = await supabase
+          .from('orders')
+          .select('status, deleted_at')
+          .eq('id', id)
+          .maybeSingle()
+
+        if (latestOrder && !latestOrder.deleted_at && latestOrder.status === 'pending') {
+          return NextResponse.json({ success: true, status: 'pending', already_restored: true, reserved_items: 0 })
+        }
+
         const mapped = orderError(error.message)
         return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
       }
@@ -226,14 +258,16 @@ export async function PATCH(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'لا يمكن إرجاع طلب أُرسل للشحن' }, { status: 409 })
     }
 
-    if (order.ecotrack_tracking) {
-      const result = await ecotrackDeleteOrder(order.ecotrack_tracking)
-      if (!result.success && !isInvalidEcotrackTracking(result.message)) {
+    let activeTracking = order.ecotrack_tracking
+    if (activeTracking) {
+      const result = await removeEcotrackDraft(supabase, id, activeTracking)
+      if (!result.success) {
         return NextResponse.json(
-          { success: false, error: result.message || 'تعذّر حذف مسودة Ecotrack' },
-          { status: 502 }
+          { success: false, error: result.error || 'تعذّر حذف مسودة Ecotrack' },
+          { status: result.status ?? 502 }
         )
       }
+      activeTracking = result.tracking
     }
 
     let pendingUpdate = supabase
@@ -243,8 +277,8 @@ export async function PATCH(req: NextRequest, { params }: Props) {
       .eq('status', 'confirmed')
       .is('deleted_at', null)
 
-    pendingUpdate = order.ecotrack_tracking
-      ? pendingUpdate.eq('ecotrack_tracking', order.ecotrack_tracking)
+    pendingUpdate = activeTracking
+      ? pendingUpdate.eq('ecotrack_tracking', activeTracking)
       : pendingUpdate.is('ecotrack_tracking', null)
 
     const { data: pendingOrder, error } = await pendingUpdate
@@ -252,16 +286,27 @@ export async function PATCH(req: NextRequest, { params }: Props) {
       .maybeSingle()
 
     if (error || !pendingOrder) {
-      if (order.ecotrack_tracking) {
+      if (activeTracking) {
         const { error: cleanupError } = await supabase
           .from('orders')
           .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
           .eq('id', id)
-          .eq('ecotrack_tracking', order.ecotrack_tracking)
+          .eq('ecotrack_tracking', activeTracking)
         if (cleanupError) {
           console.error('Ecotrack draft deleted but local tracking cleanup failed:', id, cleanupError)
         }
       }
+
+      const { data: latestOrder } = await supabase
+        .from('orders')
+        .select('status, ecotrack_tracking')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (latestOrder?.status === 'pending' && !latestOrder.ecotrack_tracking) {
+        return NextResponse.json({ success: true, status: 'pending', already_pending: true })
+      }
+
       return NextResponse.json({ success: false, error: 'تعذّر تحديث حالة الطلب' }, { status: 500 })
     }
 
@@ -460,14 +505,80 @@ export async function PUT(req: NextRequest, { params }: Props) {
       currentOrder.status === 'confirmed' &&
       currentOrder.ecotrack_status === 'draft' &&
       Boolean(currentOrder.ecotrack_tracking)
+    let activeEcotrackTracking = currentOrder.ecotrack_tracking as string | null
+    let ecotrackDraftUpdated = false
+    let ecotrackRelinked = false
+    let staleEcotrackDraft = false
 
     if (shouldUpdateEcotrack) {
-      const result = await ecotrackUpdateOrder(currentOrder.ecotrack_tracking!, nextEcotrackData)
+      let result = await ecotrackUpdateOrder(activeEcotrackTracking!, nextEcotrackData)
       if (!result.success) {
-        return NextResponse.json(
-          { success: false, error: result.message || 'تعذّر تحديث مسودة Ecotrack' },
-          { status: 502 }
-        )
+        if (isInvalidEcotrackTracking(result.message)) {
+          const recovery = await recoverEcotrackTracking(supabase, id)
+          if (!recovery.success || recovery.ambiguous) {
+            return NextResponse.json(
+              { success: false, error: recovery.error || 'تعذّر إصلاح رقم تتبع Ecotrack' },
+              { status: recovery.status ?? 502 }
+            )
+          }
+
+          if (recovery.recovered && recovery.tracking && recovery.mapped) {
+            if (recovery.mapped.ecotrack_status !== 'draft') {
+              return NextResponse.json(
+                {
+                  success: false,
+                  error: 'تم تحديث حالة الطلب من Ecotrack ولم يعد قابلاً للتعديل؛ أغلقي النافذة وحدّثي الصفحة',
+                },
+                { status: 409 }
+              )
+            }
+
+            if (recovery.tracking === activeEcotrackTracking) {
+              return NextResponse.json(
+                { success: false, error: result.message || 'Ecotrack رفض تعديل هذه البوليصة' },
+                { status: 502 }
+              )
+            }
+
+            activeEcotrackTracking = recovery.tracking
+            ecotrackRelinked = true
+            result = await ecotrackUpdateOrder(activeEcotrackTracking, nextEcotrackData)
+            if (!result.success) {
+              return NextResponse.json(
+                { success: false, error: result.message || 'تعذّر تحديث مسودة Ecotrack' },
+                { status: 502 }
+              )
+            }
+            ecotrackDraftUpdated = true
+          } else {
+            const { data: clearedOrder, error: clearError } = await supabase
+              .from('orders')
+              .update({ ecotrack_tracking: null, ecotrack_status: 'none' })
+              .eq('id', id)
+              .eq('status', 'confirmed')
+              .eq('ecotrack_status', 'draft')
+              .eq('ecotrack_tracking', activeEcotrackTracking!)
+              .is('deleted_at', null)
+              .select('id')
+              .maybeSingle()
+
+            if (clearError || !clearedOrder) {
+              return NextResponse.json(
+                { success: false, error: 'تغيّرت حالة الطلب، حدّثي الصفحة ثم حاولي مجددًا' },
+                { status: 409 }
+              )
+            }
+            activeEcotrackTracking = null
+            staleEcotrackDraft = true
+          }
+        } else {
+          return NextResponse.json(
+            { success: false, error: result.message || 'تعذّر تحديث مسودة Ecotrack' },
+            { status: 502 }
+          )
+        }
+      } else {
+        ecotrackDraftUpdated = true
       }
     }
 
@@ -487,8 +598,8 @@ export async function PUT(req: NextRequest, { params }: Props) {
     })
 
     if (error) {
-      if (shouldUpdateEcotrack) {
-        const rollback = await ecotrackUpdateOrder(currentOrder.ecotrack_tracking!, previousEcotrackData)
+      if (ecotrackDraftUpdated && activeEcotrackTracking) {
+        const rollback = await ecotrackUpdateOrder(activeEcotrackTracking, previousEcotrackData)
         if (!rollback.success) {
           console.error('Failed to restore Ecotrack draft after order update error:', rollback.message)
         }
@@ -497,7 +608,33 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
     }
 
-    return NextResponse.json({ success: true, status: currentOrder.status, totals })
+    if (staleEcotrackDraft) {
+      const replacement = await ensureEcotrackDraft(supabase, id)
+      if (!replacement.success || !replacement.tracking) {
+        return NextResponse.json({
+          success: true,
+          status: currentOrder.status,
+          totals,
+          warning: replacement.error || 'تم حفظ الطلب، لكن تعذّر إعادة إنشاء مسودة Ecotrack',
+        })
+      }
+
+      return NextResponse.json({
+        success: true,
+        status: currentOrder.status,
+        totals,
+        ecotrack_recreated: true,
+        ecotrack_tracking: replacement.tracking,
+      })
+    }
+
+    return NextResponse.json({
+      success: true,
+      status: currentOrder.status,
+      totals,
+      ecotrack_relinked: ecotrackRelinked,
+      ecotrack_tracking: ecotrackRelinked ? activeEcotrackTracking : undefined,
+    })
   } catch (error) {
     console.error('Unexpected PUT /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })

@@ -152,6 +152,9 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   // ── Ecotrack helpers ──────────────────────────────────────
   const setLoading = (id: string, action: string, val: boolean) =>
     setEcotrackLoading(prev => ({ ...prev, [`${id}-${action}`]: val }))
+  const isOrderBusy = (id: string) => Object.entries(ecotrackLoading).some(
+    ([key, value]) => value && key.startsWith(`${id}-`)
+  )
 
   const createDraft = async (orderId: string) => {
     setLoading(orderId, 'create', true)
@@ -196,6 +199,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               o.id === orderId
                 ? {
                     ...o,
+                    status: data.status ?? o.status,
                     ecotrack_tracking: data.tracking ?? o.ecotrack_tracking,
                     ecotrack_status: 'shipped' as const,
                   }
@@ -203,6 +207,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
             ))
             if (data.recreated) {
               showToast('أُعيد إنشاء البوليصة القديمة وتم إرسال الطلب', 'success')
+            } else if (data.relinked) {
+              showToast('تم ربط رقم التتبع الجديد وتحديث حالة الطلب', 'success')
             }
           } else {
             if (data.recreated && data.tracking) {
@@ -377,7 +383,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     })
   }
 
-  const handleOrderSaved = async () => {
+  const handleOrderSaved = async (warning?: string) => {
     setEditingOrder(null)
 
     try {
@@ -389,7 +395,10 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     } catch {
       // The edit is already saved; the regular refresh will reconcile the list.
     } finally {
-      showToast('تم حفظ تعديلات الطلب', 'success')
+      showToast(
+        warning ? `تم حفظ التعديلات. ${warning}` : 'تم حفظ تعديلات الطلب',
+        warning ? 'error' : 'success'
+      )
     }
   }
 
@@ -422,8 +431,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           {!order.ecotrack_tracking && order.status === 'confirmed' && (
             <button
               onClick={() => createDraft(order.id)}
-              disabled={ecotrackLoading[`${order.id}-create`]}
-              className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg"
+              disabled={isOrderBusy(order.id)}
+              className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg disabled:opacity-50"
               style={{ backgroundColor: '#1a1a1a' }}
             >
               {ecotrackLoading[`${order.id}-create`]
@@ -441,8 +450,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               </span>
               <button
                 onClick={() => shipOrder(order.id)}
-                disabled={ecotrackLoading[`${order.id}-ship`]}
-                className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg"
+                disabled={isOrderBusy(order.id)}
+                className="flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg disabled:opacity-50"
                 style={{ backgroundColor: '#8B1A2E' }}
               >
                 {ecotrackLoading[`${order.id}-ship`]
@@ -613,7 +622,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                         <>
                           <button
                             onClick={() => restoreOrder(order)}
-                            disabled={ecotrackLoading[`${order.id}-restore`]}
+                            disabled={isOrderBusy(order.id)}
                             className="p-1.5 rounded-lg text-green-700 hover:bg-green-50 transition-colors disabled:opacity-50"
                             aria-label="استرجاع الطلب"
                             title="استرجاع الطلب"
@@ -624,7 +633,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                           </button>
                           <button
                             onClick={() => permanentlyDeleteOrder(order)}
-                            disabled={ecotrackLoading[`${order.id}-permanent-delete`]}
+                            disabled={isOrderBusy(order.id)}
                             className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                             aria-label="حذف الطلب نهائيًا"
                             title="حذف الطلب نهائيًا"
@@ -637,7 +646,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       ) : order.status === 'pending' ? (
                         <button
                           onClick={() => confirmOrder(order.id)}
-                          disabled={ecotrackLoading[`${order.id}-confirm`]}
+                          disabled={isOrderBusy(order.id)}
                           className="inline-flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90 disabled:opacity-50"
                           style={{ backgroundColor: '#1A1410' }}
                         >
@@ -647,7 +656,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
                         <button
                           onClick={() => revertToPending(order)}
-                          disabled={ecotrackLoading[`${order.id}-pending`]}
+                          disabled={isOrderBusy(order.id)}
                           className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-2.5 py-1.5 rounded-lg border border-border disabled:opacity-50"
                         >
                           {ecotrackLoading[`${order.id}-pending`]
@@ -659,7 +668,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       {!order.deleted_at && (
                         <button
                           onClick={() => setEditingOrder(order)}
-                          className="p-1.5 rounded-lg text-muted hover:text-brand hover:bg-surface transition-colors"
+                          disabled={isOrderBusy(order.id)}
+                          className="p-1.5 rounded-lg text-muted hover:text-brand hover:bg-surface transition-colors disabled:opacity-50"
                           aria-label="تعديل الطلب"
                           title="تعديل الطلب"
                         >
@@ -669,7 +679,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       {!order.deleted_at && order.status !== 'delivered' && order.ecotrack_status !== 'shipped' && (
                         <button
                           onClick={() => deleteOrder(order)}
-                          disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                          disabled={isOrderBusy(order.id)}
                           className="p-1.5 rounded-lg text-muted hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                           aria-label="نقل الطلب إلى المحذوفات"
                           title="نقل إلى المحذوفات"
@@ -811,7 +821,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                 <>
                   <button
                     onClick={() => restoreOrder(order)}
-                    disabled={ecotrackLoading[`${order.id}-restore`]}
+                    disabled={isOrderBusy(order.id)}
                     className="mr-auto flex items-center gap-1 text-xs font-heading font-bold text-green-700 px-3 py-1.5 rounded-lg border border-green-200 disabled:opacity-50"
                   >
                     {ecotrackLoading[`${order.id}-restore`]
@@ -821,7 +831,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                   </button>
                   <button
                     onClick={() => permanentlyDeleteOrder(order)}
-                    disabled={ecotrackLoading[`${order.id}-permanent-delete`]}
+                    disabled={isOrderBusy(order.id)}
                     className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
                   >
                     {ecotrackLoading[`${order.id}-permanent-delete`]
@@ -833,7 +843,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               ) : order.status === 'pending' ? (
                 <button
                   onClick={() => confirmOrder(order.id)}
-                  disabled={ecotrackLoading[`${order.id}-confirm`]}
+                  disabled={isOrderBusy(order.id)}
                   className="mr-auto inline-flex items-center gap-1 text-xs font-heading font-bold text-white px-3 py-1.5 rounded-lg transition-colors hover:opacity-90 disabled:opacity-50"
                   style={{ backgroundColor: '#1A1410' }}
                 >
@@ -843,7 +853,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               ) : order.status === 'confirmed' && order.ecotrack_status !== 'shipped' ? (
                 <button
                   onClick={() => revertToPending(order)}
-                  disabled={ecotrackLoading[`${order.id}-pending`]}
+                  disabled={isOrderBusy(order.id)}
                   className="mr-auto flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border disabled:opacity-50"
                 >
                   {ecotrackLoading[`${order.id}-pending`]
@@ -855,7 +865,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               {!order.deleted_at && (
                 <button
                   onClick={() => setEditingOrder(order)}
-                  className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border"
+                  disabled={isOrderBusy(order.id)}
+                  className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border disabled:opacity-50"
                 >
                   <Pencil size={12} />
                   تعديل
@@ -864,7 +875,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               {!order.deleted_at && order.status !== 'delivered' && order.ecotrack_status !== 'shipped' && (
                 <button
                   onClick={() => deleteOrder(order)}
-                  disabled={ecotrackLoading[`${order.id}-delete-order`]}
+                  disabled={isOrderBusy(order.id)}
                   className="flex items-center gap-1 text-xs font-heading font-bold text-red-600 px-3 py-1.5 rounded-lg border border-red-200 disabled:opacity-50"
                 >
                   {ecotrackLoading[`${order.id}-delete-order`]

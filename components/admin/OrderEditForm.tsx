@@ -22,7 +22,7 @@ interface Props {
   order: Order
   products: Product[]
   onCancel: () => void
-  onSaved: () => void | Promise<void>
+  onSaved: (warning?: string) => void | Promise<void>
 }
 
 function initialItems(order: Order): EditableItem[] {
@@ -174,7 +174,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
         return
       }
 
-      await onSaved()
+      await onSaved(typeof data.warning === 'string' ? data.warning : undefined)
     } catch {
       setError('تعذّر الاتصال بالخادم')
     } finally {
