@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { ecotrackDeleteOrder, ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -121,7 +122,7 @@ export async function DELETE(req: NextRequest, { params }: Props) {
 
     if (order.ecotrack_tracking) {
       const ecotrackResult = await ecotrackDeleteOrder(order.ecotrack_tracking)
-      if (!ecotrackResult.success) {
+      if (!ecotrackResult.success && !isInvalidEcotrackTracking(ecotrackResult.message)) {
         return NextResponse.json(
           { success: false, error: ecotrackResult.message || 'تعذّر حذف البوليصة من شركة التوصيل' },
           { status: 502 }
@@ -227,7 +228,7 @@ export async function PATCH(req: NextRequest, { params }: Props) {
 
     if (order.ecotrack_tracking) {
       const result = await ecotrackDeleteOrder(order.ecotrack_tracking)
-      if (!result.success) {
+      if (!result.success && !isInvalidEcotrackTracking(result.message)) {
         return NextResponse.json(
           { success: false, error: result.message || 'تعذّر حذف مسودة Ecotrack' },
           { status: 502 }

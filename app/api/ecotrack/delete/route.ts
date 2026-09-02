@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ecotrackDeleteOrder } from '@/lib/ecotrack'
+import { isInvalidEcotrackTracking } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAdmin } from '../_auth'
 
@@ -34,7 +35,8 @@ export async function DELETE(req: NextRequest) {
 
     const result = await ecotrackDeleteOrder(order.ecotrack_tracking)
 
-    if (!result.success) {
+    const alreadyMissing = !result.success && isInvalidEcotrackTracking(result.message)
+    if (!result.success && !alreadyMissing) {
       return NextResponse.json({ success: false, error: result.message }, { status: 400 })
     }
 
@@ -52,7 +54,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: true, pending_cleanup: true })
     }
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, already_deleted: alreadyMissing })
   } catch (error) {
     console.error('Unexpected Ecotrack draft deletion error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })

@@ -84,7 +84,7 @@ const API_TIMEOUT_MS = 15_000
 
 type EcotrackMutationResponse = {
   success?: boolean
-  message?: string
+  message?: unknown
   errors?: unknown
   tracking?: string
 }
@@ -94,8 +94,32 @@ function ecotrackEndpoint(path: string) {
   return `${BASE_URL}${path}`
 }
 
+function collectMutationMessages(value: unknown, messages: string[]) {
+  if (typeof value === 'string') {
+    const message = value.trim()
+    if (message) messages.push(message)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(item => collectMutationMessages(item, messages))
+    return
+  }
+
+  if (value && typeof value === 'object') {
+    Object.values(value).forEach(item => collectMutationMessages(item, messages))
+  }
+}
+
+function mutationMessage(data: EcotrackMutationResponse) {
+  const messages: string[] = []
+  collectMutationMessages(data.message, messages)
+  collectMutationMessages(data.errors, messages)
+  return [...new Set(messages)].join(' ') || undefined
+}
+
 function mutationResult(res: Response, data: EcotrackMutationResponse) {
-  const message = data.message ?? (data.errors ? JSON.stringify(data.errors) : undefined)
+  const message = mutationMessage(data)
   return { success: res.ok && data.success === true, message }
 }
 
@@ -228,7 +252,7 @@ export async function ecotrackCreateOrder(params: {
     if (res.ok && data.success === true && data.tracking) {
       return { success: true, tracking: data.tracking }
     }
-    return { success: false, message: data.message ?? JSON.stringify(data.errors) }
+    return { success: false, message: mutationMessage(data) }
   } catch {
     return { success: false, message: 'Network error' }
   }
@@ -294,11 +318,11 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
 // DELETE order
 export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
   try {
-    const body = formBody({ tracking })
-    const res = await fetch(ecotrackEndpoint('/api/v1/delete/order'), {
+    const endpoint = new URL(ecotrackEndpoint('/api/v1/delete/order'))
+    endpoint.searchParams.set('tracking', tracking.trim())
+    const res = await fetch(endpoint, {
       method: 'DELETE',
-      headers: ecotrackHeaders('application/x-www-form-urlencoded'),
-      body,
+      headers: ecotrackHeaders(),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
     const data = await res.json().catch(() => ({})) as EcotrackMutationResponse

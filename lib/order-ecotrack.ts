@@ -27,10 +27,19 @@ export function isInvalidEcotrackTracking(message: string | undefined) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’']/g, ' ')
 
-  return normalized.includes('tracking') && (
-    normalized.includes('invalid') || normalized.includes('invalide')
-  )
+  const mentionsTracking = normalized.includes('tracking') || normalized.includes('suivi')
+  const meansMissing = [
+    'invalid',
+    'invalide',
+    'not found',
+    'introuvable',
+    'does not exist',
+    'n existe pas',
+  ].some(fragment => normalized.includes(fragment))
+
+  return mentionsTracking && meansMissing
 }
 
 export async function ensureEcotrackDraft(
