@@ -155,7 +155,7 @@ export async function removeEcotrackDraft(
 ): Promise<RemoveDraftResult> {
   const firstAttempt = await ecotrackDeleteOrder(currentTracking)
   if (firstAttempt.success) return { success: true, tracking: currentTracking }
-  if (!isInvalidEcotrackTracking(firstAttempt.message)) {
+  if (!firstAttempt.lookupRequired && !isInvalidEcotrackTracking(firstAttempt.message)) {
     return {
       success: false,
       tracking: currentTracking,

@@ -87,6 +87,13 @@ type EcotrackMutationResponse = {
   message?: unknown
   errors?: unknown
   tracking?: string
+  delete?: unknown
+}
+
+export type EcotrackDeleteResult = {
+  success: boolean
+  message?: string
+  lookupRequired?: boolean
 }
 
 function ecotrackEndpoint(path: string) {
@@ -316,7 +323,7 @@ export async function ecotrackUpdateOrder(tracking: string, params: {
 }
 
 // DELETE order
-export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: boolean; message?: string }> {
+export async function ecotrackDeleteOrder(tracking: string): Promise<EcotrackDeleteResult> {
   try {
     const endpoint = new URL(ecotrackEndpoint('/api/v1/delete/order'))
     endpoint.searchParams.set('tracking', tracking.trim())
@@ -326,7 +333,19 @@ export async function ecotrackDeleteOrder(tracking: string): Promise<{ success: 
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     })
     const data = await res.json().catch(() => ({})) as EcotrackMutationResponse
-    return mutationResult(res, data)
+    const deleteState = String(data.delete ?? '').trim().toLowerCase()
+
+    // Some Ecotrack accounts return { delete: "success|fail" } instead of
+    // the documented { success, message } response for this endpoint.
+    if (res.ok && (data.success === true || ['success', 'ok', 'true', '1'].includes(deleteState))) {
+      return { success: true, message: mutationMessage(data) }
+    }
+
+    return {
+      success: false,
+      message: mutationMessage(data),
+      lookupRequired: res.ok && data.success === undefined && deleteState === 'fail',
+    }
   } catch {
     return { success: false, message: 'Network error' }
   }
