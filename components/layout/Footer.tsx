@@ -96,11 +96,11 @@ export default function Footer() {
           <div className="flex flex-col gap-5">
             <div className="flex justify-right w-full">
               <Image
-                src="/logo.png"
+                src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/logo.png"
                 alt=""
                 width={500}
                 height={200}
-                
+                unoptimized
                 style={{ width: 'auto', height: '100px' }}
                 className="object-contain select-none"
               />

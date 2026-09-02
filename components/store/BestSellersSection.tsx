@@ -47,7 +47,7 @@ export default function BestSellersSection({ products }: { products: Product[] }
             المنتجات الأكثر طلباً من زبوناتنا
           </p>
 
-          <Link href="/best-sellers">
+          <Link href="/best-sellers" prefetch={false}>
             <motion.span
               whileHover={{ gap: '10px' }}
               className="inline-flex items-center gap-1.5 font-heading font-bold text-sm transition-all duration-200"

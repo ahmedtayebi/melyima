@@ -69,7 +69,7 @@ export default function DiscountsSection({ products }: { products: Product[] }) 
             أسعار استثنائية على أجمل التشكيلات
           </p>
 
-          <Link href="/discounts">
+          <Link href="/discounts" prefetch={false}>
             <motion.span
               whileHover={{ gap: '10px' }}
               className="inline-flex items-center gap-1.5 font-heading font-bold text-sm transition-all duration-200"

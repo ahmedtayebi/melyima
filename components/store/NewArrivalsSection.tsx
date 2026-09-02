@@ -59,7 +59,7 @@ export default function NewArrivalsSection({ products }: { products: Product[] }
             أحدث ما أضفناه من تشكيلات عصرية
           </p>
 
-          <Link href="/new-arrivals">
+          <Link href="/new-arrivals" prefetch={false}>
             <motion.span
               whileHover={{ gap: '10px' }}
               className="inline-flex items-center gap-1.5 font-heading font-bold text-sm transition-all duration-200"

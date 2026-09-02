@@ -255,10 +255,11 @@ export default function HeroSection() {
                   transition={{ duration: 0.9, delay: 0.2, ease: EASE }}
                 >
                   <Image
-                    src="/pogo.png"
+                    src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/pogo.png"
                     alt="عباءة نسائية عصرية من MELY•IMA"
                     width={700}
                     height={300}
+                    unoptimized
                     className="object-contain select-none"
                     style={{ width: '100%', height: 'auto' }}
                     priority

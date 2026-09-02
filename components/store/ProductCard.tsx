@@ -70,6 +70,7 @@ export default function ProductCard({ product }: { product: Product }) {
       {/* RIGHT — Image */}
       <Link
         href={`/products/${product.id}`}
+        prefetch={false}
         className="w-[42%] shrink-0 relative overflow-hidden"
         style={{ background: '#F4ECE0' }}
         onMouseEnter={() => setImageHovered(true)}

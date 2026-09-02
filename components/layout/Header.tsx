@@ -65,10 +65,11 @@ export default function Header({ onCartClick }: HeaderProps) {
             className="flex items-center flex-shrink-0"
           >
             <Image
-              src="/logo.png"
+              src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/logo.png"
               alt="MELY•IMA"
               width={150}
               height={70}
+              unoptimized
               style={{ width: 'auto', height: '60px' }}
               className="object-contain select-none"
               priority
