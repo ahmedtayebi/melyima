@@ -188,6 +188,22 @@ async function uploadProductImage(file: File, productId: string, colorId: string
   return result.url as string
 }
 
+async function revalidateStoreProductPages(productId: string) {
+  const res = await fetch('/api/admin/store-cache', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productId }),
+  })
+
+  if (!res.ok) {
+    let result: { error?: string } = {}
+    try {
+      result = await res.json()
+    } catch {}
+    throw new Error(result.error || 'تعذّر تحديث صفحات المتجر')
+  }
+}
+
 function buildInitialColors(product?: Product): ColorEntry[] {
   if (!product?.product_colors?.length) return []
   return [...product.product_colors]
@@ -611,6 +627,12 @@ export default function ProductForm({ productId, initialData, categories = [] }:
           .upsert(variantRows, { onConflict: 'color_id,size_id' })
 
         if (variantError) throw new Error(variantError.message)
+      }
+
+      try {
+        await revalidateStoreProductPages(productId)
+      } catch (cacheError) {
+        console.warn('Product saved but store cache revalidation failed:', cacheError)
       }
 
       router.push('/admin/products')

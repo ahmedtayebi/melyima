@@ -82,6 +82,96 @@ function orderError(message: string) {
   return { status: 400, error: 'تعذّر تنفيذ العملية على الطلب' }
 }
 
+async function restoreUnlimitedStockOrder(
+  supabase: ReturnType<typeof createAdminClient>,
+  orderId: string
+) {
+  const { data: items, error: itemsError } = await supabase
+    .from('order_items')
+    .select('product_id, color_id, size_id')
+    .eq('order_id', orderId)
+
+  if (itemsError || !items?.length) return { restored: false, databaseError: Boolean(itemsError) }
+  if (items.some(item => !item.product_id || !item.color_id || !item.size_id)) {
+    return { restored: false, databaseError: false }
+  }
+
+  const productIds = [...new Set(items.map(item => item.product_id as string))]
+  const colorIds = [...new Set(items.map(item => item.color_id as string))]
+  const sizeIds = [...new Set(items.map(item => item.size_id as string))]
+
+  const [productsResult, colorsResult, sizesResult, variantsResult] = await Promise.all([
+    supabase.from('products').select('id').in('id', productIds),
+    supabase.from('product_colors').select('id, product_id').in('id', colorIds),
+    supabase.from('product_sizes').select('id, product_id').in('id', sizeIds),
+    supabase
+      .from('product_variants')
+      .select('product_id, color_id, size_id')
+      .in('product_id', productIds)
+      .in('color_id', colorIds)
+      .in('size_id', sizeIds),
+  ])
+
+  if (productsResult.error || colorsResult.error || sizesResult.error || variantsResult.error) {
+    return { restored: false, databaseError: true }
+  }
+
+  const productSet = new Set((productsResult.data ?? []).map(product => product.id))
+  const colorSet = new Set(
+    (colorsResult.data ?? []).map(color => `${color.product_id}:${color.id}`)
+  )
+  const sizeSet = new Set(
+    (sizesResult.data ?? []).map(size => `${size.product_id}:${size.id}`)
+  )
+  const variantSet = new Set(
+    (variantsResult.data ?? []).map(variant =>
+      `${variant.product_id}:${variant.color_id}:${variant.size_id}`
+    )
+  )
+
+  const allOptionsExist = items.every(item =>
+    productSet.has(item.product_id as string) &&
+    colorSet.has(`${item.product_id}:${item.color_id}`) &&
+    sizeSet.has(`${item.product_id}:${item.size_id}`)
+  )
+  const allItemsUseUnlimitedStock = items.every(item =>
+    !variantSet.has(`${item.product_id}:${item.color_id}:${item.size_id}`)
+  )
+
+  if (!allOptionsExist || !allItemsUseUnlimitedStock) {
+    return { restored: false, databaseError: false }
+  }
+
+  const { data: restoredOrder, error: restoreError } = await supabase
+    .from('orders')
+    .update({
+      deleted_at: null,
+      deleted_from_status: null,
+      status: 'pending',
+      ecotrack_tracking: null,
+      ecotrack_status: 'none',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', orderId)
+    .not('deleted_at', 'is', null)
+    .select('id')
+    .maybeSingle()
+
+  if (restoreError) return { restored: false, databaseError: true }
+  if (restoredOrder) return { restored: true, databaseError: false }
+
+  const { data: currentOrder } = await supabase
+    .from('orders')
+    .select('status, deleted_at')
+    .eq('id', orderId)
+    .maybeSingle()
+
+  return {
+    restored: Boolean(currentOrder && !currentOrder.deleted_at && currentOrder.status === 'pending'),
+    databaseError: false,
+  }
+}
+
 async function getOrderId(params: Props['params']) {
   const { id } = await params
   return UUID_PATTERN.test(id) ? id : null
@@ -222,6 +312,24 @@ export async function PATCH(req: NextRequest, { params }: Props) {
         p_order_id: id,
       })
       if (error) {
+        if (error.message.includes('product_unavailable')) {
+          const compatibilityRestore = await restoreUnlimitedStockOrder(supabase, id)
+          if (compatibilityRestore.restored) {
+            return NextResponse.json({
+              success: true,
+              status: 'pending',
+              legacy_unlimited_stock: true,
+              reserved_items: 0,
+            })
+          }
+          if (compatibilityRestore.databaseError) {
+            return NextResponse.json(
+              { success: false, error: 'تعذّر التحقق من مخزون الطلب' },
+              { status: 500 }
+            )
+          }
+        }
+
         const { data: latestOrder } = await supabase
           .from('orders')
           .select('status, deleted_at')
