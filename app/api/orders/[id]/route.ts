@@ -1,3 +1,5 @@
+import { acquireOrderOperation, orderBusyResponse } from '@/lib/order-operation'
+import { invalidateStoreCache } from '@/lib/store-cache'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
@@ -182,6 +184,7 @@ async function getOrderId(params: Props['params']) {
 }
 
 export async function DELETE(req: NextRequest, { params }: Props) {
+  let release: (() => Promise<void>) | null = null
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
@@ -192,6 +195,8 @@ export async function DELETE(req: NextRequest, { params }: Props) {
     }
 
     const supabase = createAdminClient()
+    release = await acquireOrderOperation(supabase, id)
+    if (!release) return orderBusyResponse()
     const permanent = req.nextUrl.searchParams.get('permanent') === '1'
 
     if (permanent) {
@@ -265,10 +270,16 @@ export async function DELETE(req: NextRequest, { params }: Props) {
   } catch (error) {
     console.error('Unexpected DELETE /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
+  } finally {
+    if (release) {
+      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
+      await release()
+    }
   }
 }
 
 export async function PATCH(req: NextRequest, { params }: Props) {
+  let release: (() => Promise<void>) | null = null
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
@@ -281,6 +292,8 @@ export async function PATCH(req: NextRequest, { params }: Props) {
     const body = await req.json().catch(() => ({}))
     const action = body.action
     const supabase = createAdminClient()
+    release = await acquireOrderOperation(supabase, id)
+    if (!release) return orderBusyResponse()
 
     if (action === 'confirm') {
       const { data: confirmedOrder, error } = await supabase
@@ -426,10 +439,16 @@ export async function PATCH(req: NextRequest, { params }: Props) {
   } catch (error) {
     console.error('Unexpected PATCH /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
+  } finally {
+    if (release) {
+      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
+      await release()
+    }
   }
 }
 
 export async function PUT(req: NextRequest, { params }: Props) {
+  let release: (() => Promise<void>) | null = null
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
@@ -459,12 +478,14 @@ export async function PUT(req: NextRequest, { params }: Props) {
     }
 
     const supabase = createAdminClient()
+    release = await acquireOrderOperation(supabase, id)
+    if (!release) return orderBusyResponse()
     const { data: currentOrder, error: fetchError } = await supabase
       .from('orders')
       .select(`
         id, customer_name, phone, phone2, wilaya, wilaya_name, commune,
         delivery_type, delivery_price, products_total, total_price, address,
-        status, notes, deleted_at, ecotrack_tracking, ecotrack_status,
+        status, notes, deleted_at, ecotrack_tracking, ecotrack_status, updated_at,
         order_items(product_id, color_id, size_id, product_name, color_name, size_label, quantity)
       `)
       .eq('id', id)
@@ -472,6 +493,9 @@ export async function PUT(req: NextRequest, { params }: Props) {
 
     if (fetchError || !currentOrder) {
       return NextResponse.json({ success: false, error: 'الطلب غير موجود' }, { status: 404 })
+    }
+    if (typeof body.expected_updated_at !== 'string' || body.expected_updated_at !== currentOrder.updated_at) {
+      return NextResponse.json({ success: false, error: 'تغيّر الطلب منذ فتح نافذة التعديل. أغلقيها وحدّثي الصفحة ثم حاولي مجددًا.' }, { status: 409 })
     }
     if (currentOrder.deleted_at) {
       return NextResponse.json({ success: false, error: 'استرجع الطلب من المحذوفات قبل تعديله' }, { status: 409 })
@@ -771,5 +795,10 @@ export async function PUT(req: NextRequest, { params }: Props) {
   } catch (error) {
     console.error('Unexpected PUT /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
+  } finally {
+    if (release) {
+      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
+      await release()
+    }
   }
 }

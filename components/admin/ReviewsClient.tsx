@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Star, Check, X, AlertTriangle } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { saveCatalog } from '@/lib/admin-catalog-client'
 import { cn } from '@/lib/utils'
 import type { Review } from '@/lib/types'
 
@@ -37,16 +37,14 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
     onConfirm: () => void
   } | null>(null)
 
-  const supabase = createClient()
+  const [error, setError] = useState('')
 
   const updateStatus = async (id: string, status: 'approved' | 'rejected') => {
-    const { error } = await supabase
-      .from('reviews')
-      .update({ status })
-      .eq('id', id)
-    if (!error) {
+    setError('')
+    try {
+      await saveCatalog('review_status', { id, status })
       setReviews(prev => prev.map(r => r.id === id ? { ...r, status } : r))
-    }
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذّر حفظ التقييم') }
   }
 
   const deleteReview = (id: string) => {
@@ -54,8 +52,11 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
       message: 'هل أنت متأكد من حذف هذا التقييم؟',
       onConfirm: async () => {
         setConfirmDialog(null)
-        const { error } = await supabase.from('reviews').delete().eq('id', id)
-        if (!error) setReviews(prev => prev.filter(r => r.id !== id))
+        setError('')
+        try {
+          await saveCatalog('review_delete', { id })
+          setReviews(prev => prev.filter(r => r.id !== id))
+        } catch (err) { setError(err instanceof Error ? err.message : 'تعذّر حذف التقييم') }
       },
     })
   }
@@ -75,6 +76,7 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
 
       {/* Header */}
       <div className="flex items-center gap-3">
@@ -177,7 +179,7 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
               <StarDisplay rating={review.rating} />
             </div>
             <p className="font-body text-sm text-muted text-right leading-relaxed">
-              "{review.comment}"
+              &quot;{review.comment}&quot;
             </p>
 
             {/* Images */}

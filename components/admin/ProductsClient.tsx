@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { Plus, Pencil, Trash2, Eye, EyeOff, X, Check } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { saveCatalog } from '@/lib/admin-catalog-client'
 import type { Product, Category } from '@/lib/types'
 
 interface Props {
@@ -19,63 +19,46 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
   const [addingCategory, setAddingCategory] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const supabase = createClient()
+  const [error, setError] = useState('')
 
   // Filter products by category
   const filtered = activeCategory === 'all'
     ? products
     : products.filter(p => p.category_id === activeCategory)
 
-  // Add category
-  const handleAddCategory = async () => {
+  const mutate = async (action: () => Promise<void>) => {
+    setError('')
+    try { await action() }
+    catch (err) { setError(err instanceof Error ? err.message : 'تعذّر حفظ التغييرات') }
+  }
+
+  const handleAddCategory = () => mutate(async () => {
     if (!newCategoryName.trim()) return
-    const { data, error } = await supabase
-      .from('categories')
-      .insert({ name: newCategoryName.trim(), sort_order: categories.length })
-      .select()
-      .single()
-    if (!error && data) {
-      setCategories(prev => [...prev, data])
-      setNewCategoryName('')
-      setAddingCategory(false)
-    }
-  }
+    const data = await saveCatalog<Category>('category_create', { name: newCategoryName.trim(), sort_order: categories.length })
+    setCategories(prev => [...prev, data])
+    setNewCategoryName('')
+    setAddingCategory(false)
+  })
 
-  // Delete category
-  const handleDeleteCategory = async (id: string) => {
-    const { error } = await supabase
-      .from('categories')
-      .delete()
-      .eq('id', id)
-    if (!error) {
-      setCategories(prev => prev.filter(c => c.id !== id))
-      if (activeCategory === id) setActiveCategory('all')
-    }
-  }
+  const handleDeleteCategory = (id: string) => mutate(async () => {
+    await saveCatalog('category_delete', { id })
+    setCategories(prev => prev.filter(c => c.id !== id))
+    setProducts(prev => prev.map(p => p.category_id === id ? { ...p, category_id: null } : p))
+    if (activeCategory === id) setActiveCategory('all')
+  })
 
-  // Toggle product visibility
-  const toggleVisibility = async (id: string, current: boolean) => {
-    const { error } = await supabase
-      .from('products')
-      .update({ is_visible: !current })
-      .eq('id', id)
-    if (!error) {
-      setProducts(prev =>
-        prev.map(p => p.id === id ? { ...p, is_visible: !current } : p)
-      )
-    }
-  }
+  const toggleVisibility = (id: string, current: boolean) => mutate(async () => {
+    await saveCatalog('product_visibility', { id, visible: !current })
+    setProducts(prev => prev.map(p => p.id === id ? { ...p, is_visible: !current } : p))
+  })
 
-  // Delete product
   const handleDeleteProduct = async (id: string) => {
     if (!confirm('هل أنت متأكد من حذف هذا المنتج؟')) return
     setDeletingId(id)
-    const { error } = await supabase.from('products').delete().eq('id', id)
-    if (!error) {
+    await mutate(async () => {
+      await saveCatalog('product_delete', { id })
       setProducts(prev => prev.filter(p => p.id !== id))
-    } else {
-      alert('تعذّر حذف المنتج: ' + error.message)
-    }
+    })
     setDeletingId(null)
   }
 
@@ -91,6 +74,7 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
 
       {/* Header */}
       <div className="flex items-center justify-between">

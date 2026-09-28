@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 import { sendNewOrderNotification } from '@/lib/order-notification-email'
+import { invalidateStoreCache } from '@/lib/store-cache'
 
 type IncomingOrderItem = {
   product_id: string
@@ -199,6 +200,7 @@ export async function POST(req: NextRequest) {
     }
 
     const savedOrderId = orderId
+    try { invalidateStoreCache() } catch (error) { console.error('Order stock cache refresh failed:', error) }
     if (orderCreated) {
       after(async () => {
         try {

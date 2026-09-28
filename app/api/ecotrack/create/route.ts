@@ -1,3 +1,4 @@
+import { acquireOrderOperation, orderBusyResponse } from '@/lib/order-operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureEcotrackDraft } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -6,6 +7,7 @@ import { requireAdmin } from '../_auth'
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export async function POST(req: NextRequest) {
+  let release: (() => Promise<void>) | null = null
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
@@ -15,6 +17,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'معرّف الطلب غير صحيح' }, { status: 400 })
     }
     const supabase = createAdminClient()
+    release = await acquireOrderOperation(supabase, order_id)
+    if (!release) return orderBusyResponse()
     const result = await ensureEcotrackDraft(supabase, order_id)
 
     return NextResponse.json(
@@ -29,5 +33,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('Unexpected Ecotrack draft creation error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })
+  } finally {
+    await release?.()
   }
 }

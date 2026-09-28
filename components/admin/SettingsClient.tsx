@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { saveCatalog } from '@/lib/admin-catalog-client'
 import { Check } from 'lucide-react'
 
 export default function SettingsClient({
@@ -13,16 +13,21 @@ export default function SettingsClient({
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  const supabase = createClient()
+  const [error, setError] = useState('')
 
   const handleSave = async () => {
     setSaving(true)
-    await supabase
-      .from('store_settings')
-      .upsert({ key: 'store_policy', value: policy }, { onConflict: 'key' })
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaved(false)
+    setError('')
+    try {
+      await saveCatalog('settings_save', { policy })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذّر حفظ الإعدادات')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -41,13 +46,15 @@ export default function SettingsClient({
           </p>
           <textarea
             value={policy}
-            onChange={e => setPolicy(e.target.value)}
+            onChange={e => { setPolicy(e.target.value); setSaved(false) }}
+            disabled={saving}
             rows={4}
             className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 text-right resize-none"
             placeholder="أدخل سياسة المتجر..."
           />
         </div>
 
+        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-start">
           <button
             onClick={handleSave}

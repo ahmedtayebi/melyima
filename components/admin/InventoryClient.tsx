@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { AlertTriangle, CheckCircle2, Loader2, Pencil, Search } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { saveCatalog } from '@/lib/admin-catalog-client'
 import { cn } from '@/lib/utils'
 import type { Product, ProductColor, ProductSize, ProductVariant } from '@/lib/types'
 
@@ -187,31 +187,11 @@ export default function InventoryClient({ initialProducts }: Props) {
 
     setStatus(key, 'saving')
     try {
-      const supabase = createClient()
-
-      if (parsed === null) {
-        const { error } = await supabase
-          .from('product_variants')
-          .delete()
-          .eq('product_id', productId)
-          .eq('color_id', colorId)
-          .eq('size_id', sizeId)
-
-        if (error) throw new Error(error.message)
-        updateProductVariant(null, productId, colorId, sizeId)
-      } else {
-        const { data, error } = await supabase
-          .from('product_variants')
-          .upsert(
-            { product_id: productId, color_id: colorId, size_id: sizeId, stock: parsed },
-            { onConflict: 'color_id,size_id' }
-          )
-          .select('id, product_id, color_id, size_id, stock')
-          .single()
-
-        if (error) throw new Error(error.message)
-        updateProductVariant(data as ProductVariant, productId, colorId, sizeId)
-      }
+      const variant = await saveCatalog<ProductVariant | null>('stock_save', {
+        product_id: productId, color_id: colorId, size_id: sizeId,
+        expected_stock: currentStock, stock: parsed,
+      })
+      updateProductVariant(variant, productId, colorId, sizeId)
 
       setDrafts(prev => {
         const next = { ...prev }

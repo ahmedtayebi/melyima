@@ -183,6 +183,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          expected_updated_at: order.updated_at,
           customer_name: customerName,
           phone,
           phone2,

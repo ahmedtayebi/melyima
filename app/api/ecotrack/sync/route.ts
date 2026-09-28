@@ -57,21 +57,20 @@ function isAuthorizedCron(req: Request) {
 }
 
 async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>) {
-  // ── Fetch all orders from Ecotrack ────────────────────────
+  // Capture local versions BEFORE fetching the remote snapshot. Updates made
+  // during the HTTP request must never be overwritten with older remote data.
+  const [{ data: dbOrders, error: dbQueryError }, { data: candidates, error: candidatesError }] = await Promise.all([
+    supabase.from('orders').select('id, status, ecotrack_tracking, ecotrack_status, updated_at')
+      .not('ecotrack_tracking', 'is', null).is('deleted_at', null),
+    supabase.from('orders').select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking, created_at, updated_at')
+      .is('ecotrack_tracking', null).is('deleted_at', null).eq('status', 'confirmed'),
+  ])
+  if (dbQueryError || candidatesError) {
+    return NextResponse.json({ success: false, error: 'DB query failed' }, { status: 500 })
+  }
   const allOrders = await fetchAllEcotrackOrders()
-
   if (allOrders.length === 0) {
     return NextResponse.json({ success: true, updated: 0, imported: 0, total: 0 })
-  }
-
-  const { data: dbOrders, error: dbQueryError } = await supabase
-    .from('orders')
-    .select('id, status, ecotrack_tracking, ecotrack_status')
-    .not('ecotrack_tracking', 'is', null)
-    .is('deleted_at', null)
-
-  if (dbQueryError) {
-    return NextResponse.json({ success: false, error: 'DB query failed' }, { status: 500 })
   }
 
   // ── Phase 1: update existing orders ──────────────────────
@@ -79,7 +78,7 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
   const linkedTrackings = new Set((dbOrders ?? []).map(order => order.ecotrack_tracking).filter(Boolean))
   if (dbOrders && dbOrders.length > 0) {
     const ecotrackMap = new Map(allOrders.map(o => [o.tracking, o.status]))
-    const byKey = new Map<string, { status: string; ecotrack_status: string; ids: string[] }>()
+    const changes: Record<string, unknown>[] = []
 
     for (const order of dbOrders) {
       if (!order.ecotrack_tracking) continue
@@ -89,23 +88,13 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
       if (order.status === 'cancelled') continue
       if (order.status === 'delivered' && mapped.status === 'confirmed') continue
       if (order.status === mapped.status && order.ecotrack_status === mapped.ecotrack_status) continue
-      const key = `${mapped.status}|${mapped.ecotrack_status}`
-      const group = byKey.get(key)
-      if (group) group.ids.push(order.id)
-      else byKey.set(key, { ...mapped, ids: [order.id] })
+      changes.push({ id: order.id, ...mapped, tracking: order.ecotrack_tracking,
+        expected_tracking: order.ecotrack_tracking, expected_updated_at: order.updated_at })
     }
-
-    for (const { status, ecotrack_status, ids } of byKey.values()) {
-      const { data: changedOrders, error } = await supabase
-        .from('orders')
-        .update({ status, ecotrack_status })
-        .in('id', ids)
-        .select('id')
-
-      if (error) {
-        throw new Error(`Failed to save synchronized order statuses: ${error.message}`)
-      }
-      updated += changedOrders?.length ?? 0
+    if (changes.length) {
+      const { data, error } = await supabase.rpc('apply_ecotrack_snapshots', { p_changes: changes })
+      if (error) throw new Error(`Failed to save synchronized order statuses: ${error.message}`)
+      updated += Array.isArray(data) ? data.length : 0
     }
   }
 
@@ -116,18 +105,7 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
   )
 
   if (unlinkedEcotrackOrders.length > 0) {
-    const { data: candidates, error: candidatesError } = await supabase
-      .from('orders')
-      .select('id, customer_name, phone, phone2, wilaya, total_price, ecotrack_tracking, created_at')
-      .is('ecotrack_tracking', null)
-      .is('deleted_at', null)
-      .eq('status', 'confirmed')
-
-    if (candidatesError) {
-      return NextResponse.json({ success: false, error: 'DB fallback query failed' }, { status: 500 })
-    }
-
-    const remainingCandidates = [...((candidates ?? []) as LocalOrderCandidate[])]
+    const remainingCandidates = [...((candidates ?? []) as (LocalOrderCandidate & { updated_at: string })[])]
 
     const linkUniqueMatches = async (kind: 'reference' | 'fallback') => {
       const matchSets = unlinkedEcotrackOrders.flatMap(ecotrackOrder => {
@@ -161,24 +139,16 @@ async function syncEcotrackOrders(supabase: ReturnType<typeof createAdminClient>
         if (!remainingCandidates.some(candidate => candidate.id === matchedCandidate.id)) continue
 
         const mapped = mapEcotrackStatus(ecotrackOrder.status)
-        const { data: linkedOrder, error } = await supabase
-          .from('orders')
-          .update({
-            ecotrack_tracking: ecotrackOrder.tracking,
-            ecotrack_status: mapped.ecotrack_status,
-            status: mapped.status,
-          })
-          .eq('id', matchedCandidate.id)
-          .eq('status', 'confirmed')
-          .is('ecotrack_tracking', null)
-          .select('id')
-          .maybeSingle()
+        const { data: linkedIds, error } = await supabase.rpc('apply_ecotrack_snapshots', {
+          p_changes: [{ id: matchedCandidate.id, ...mapped, tracking: ecotrackOrder.tracking,
+            expected_tracking: null, expected_updated_at: matchedCandidate.updated_at }],
+        })
 
         if (error) {
           throw new Error(`Failed to link synchronized Ecotrack order: ${error.message}`)
         }
 
-        if (linkedOrder) {
+        if (Array.isArray(linkedIds) && linkedIds.includes(matchedCandidate.id)) {
           linked += 1
           linkedTrackings.add(ecotrackOrder.tracking)
           const index = remainingCandidates.findIndex(candidate => candidate.id === matchedCandidate.id)

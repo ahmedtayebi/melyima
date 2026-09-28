@@ -1,3 +1,4 @@
+import { acquireOrderOperation, orderBusyResponse } from '@/lib/order-operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { removeEcotrackDraft } from '@/lib/order-ecotrack'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -6,6 +7,7 @@ import { requireAdmin } from '../_auth'
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export async function DELETE(req: NextRequest) {
+  let release: (() => Promise<void>) | null = null
   try {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
@@ -16,6 +18,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     const supabase = createAdminClient()
+    release = await acquireOrderOperation(supabase, order_id)
+    if (!release) return orderBusyResponse()
     const { data: order, error: orderError } = await supabase
       .from('orders')
       .select('id, status, deleted_at, ecotrack_tracking, ecotrack_status')
@@ -62,5 +66,7 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     console.error('Unexpected Ecotrack draft deletion error:', error)
     return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 })
+  } finally {
+    await release?.()
   }
 }

@@ -58,11 +58,11 @@ function buildChartData(orders: StatsOrder[], period: Period) {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
       map.set(`${d.getDate()}/${d.getMonth() + 1}`, 0)
     }
-    const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 30)
+    const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 29); cutoff.setHours(0, 0, 0, 0)
     orders.filter(o => new Date(o.created_at) >= cutoff).forEach(o => {
       const d = new Date(o.created_at)
       const k = `${d.getDate()}/${d.getMonth() + 1}`
-      map.set(k, (map.get(k) ?? 0) + 1)
+      if (map.has(k)) map.set(k, map.get(k)! + 1)
     })
     return Array.from(map, ([label, count]) => ({ label, count }))
   }
@@ -145,7 +145,8 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
   const filtered = useMemo(() => {
     if (period === 'all') return orders
     const cutoff = new Date()
-    cutoff.setDate(cutoff.getDate() - (period === '30d' ? 30 : 90))
+    cutoff.setDate(cutoff.getDate() - (period === '30d' ? 29 : 89))
+    cutoff.setHours(0, 0, 0, 0)
     return orders.filter(o => new Date(o.created_at) >= cutoff)
   }, [orders, period])
 
@@ -157,8 +158,8 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
       totalSales:   delivered.reduce((s, o) => s + (o.total_price ?? 0), 0),
       totalOrders:  filtered.length,
       deliveryRate: terminal > 0 ? (delivered.length / terminal) * 100 : 0,
-      avgOrder:     filtered.length > 0
-        ? filtered.reduce((s, o) => s + (o.total_price ?? 0), 0) / filtered.length : 0,
+      avgOrder:     delivered.length > 0
+        ? delivered.reduce((s, o) => s + (o.total_price ?? 0), 0) / delivered.length : 0,
     }
   }, [filtered])
 
@@ -167,10 +168,10 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
     const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
     const thisMonth = orders
-      .filter(o => new Date(o.created_at) >= thisMonthStart)
+      .filter(o => o.status === 'delivered' && new Date(o.created_at) >= thisMonthStart)
       .reduce((s, o) => s + (o.total_price ?? 0), 0)
     const lastMonth = orders
-      .filter(o => { const d = new Date(o.created_at); return d >= lastMonthStart && d < thisMonthStart })
+      .filter(o => { const d = new Date(o.created_at); return o.status === 'delivered' && d >= lastMonthStart && d < thisMonthStart })
       .reduce((s, o) => s + (o.total_price ?? 0), 0)
     const delivered = filtered.filter(o => o.status === 'delivered')
     return {
@@ -209,7 +210,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
 
   const topProducts = useMemo(() => {
     const qty: Record<string, number> = {}
-    filtered.forEach(o => (o.order_items ?? []).forEach(i => {
+    filtered.filter(o => o.status === 'delivered').forEach(o => (o.order_items ?? []).forEach(i => {
       qty[i.product_name] = (qty[i.product_name] ?? 0) + i.quantity
     }))
     const entries = Object.entries(qty).sort((a, b) => b[1] - a[1]).slice(0, 5)
@@ -219,7 +220,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
 
   const topRevWilayas = useMemo(() => {
     const rev: Record<string, number> = {}
-    filtered.forEach(o => {
+    filtered.filter(o => o.status === 'delivered').forEach(o => {
       const n = o.wilaya_name ?? o.wilaya ?? 'غير محدد'
       rev[n] = (rev[n] ?? 0) + (o.total_price ?? 0)
     })
@@ -261,6 +262,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
 
   return (
     <div className="space-y-7">
+      <p className="text-xs text-muted">المبيعات والإيرادات للطلبات المُسلَّمة فقط، وتُصنَّف الفترات حسب تاريخ إنشاء الطلب.</p>
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -309,7 +311,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
             icon: Package, accent: '#10B981', iconBg: '#ECFDF5', iconColor: '#10B981',
           },
           {
-            label: 'متوسط الطلب', sub: 'إجمالي شامل التوصيل',
+            label: 'متوسط الطلب المُسلَّم', sub: 'إجمالي شامل التوصيل',
             value: `${fmt(kpis.avgOrder)} دج`,
             icon: Wallet, accent: '#8B5CF6', iconBg: '#F5F3FF', iconColor: '#8B5CF6',
           },
@@ -522,7 +524,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
             </div>
             <div>
               <p className="font-heading font-bold text-sm text-brand">أفضل المنتجات</p>
-              <p className="text-[10px] text-muted font-body">حسب الكمية المباعة</p>
+              <p className="text-[10px] text-muted font-body">حسب الكمية في الطلبات المُسلَّمة</p>
             </div>
           </div>
           {topProducts.length === 0 ? (
@@ -563,7 +565,7 @@ export default function StatsClient({ orders }: { orders: StatsOrder[] }) {
             </div>
             <div>
               <p className="font-heading font-bold text-sm text-brand">أعلى الولايات</p>
-              <p className="text-[10px] text-muted font-body">حسب الإيراد</p>
+              <p className="text-[10px] text-muted font-body">حسب إجمالي الطلبات المُسلَّمة</p>
             </div>
           </div>
           {topRevWilayas.length === 0 ? (

@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, GripVertical, Eye, EyeOff, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { saveCatalog } from '@/lib/admin-catalog-client'
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { Product, ProductVariant } from '@/lib/types'
@@ -52,7 +53,7 @@ const MAX_UPLOAD_IMAGE_SIDE = 1600
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58]
 
 function tempId() {
-  return `new_${Math.random().toString(36).slice(2)}`
+  return crypto.randomUUID()
 }
 
 function stockKey(colorId: string, sizeId: string) {
@@ -188,22 +189,6 @@ async function uploadProductImage(file: File, productId: string, colorId: string
   return result.url as string
 }
 
-async function revalidateStoreProductPages(productId: string) {
-  const res = await fetch('/api/admin/store-cache', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ productId }),
-  })
-
-  if (!res.ok) {
-    let result: { error?: string } = {}
-    try {
-      result = await res.json()
-    } catch {}
-    throw new Error(result.error || 'تعذّر تحديث صفحات المتجر')
-  }
-}
-
 function buildInitialColors(product?: Product): ColorEntry[] {
   if (!product?.product_colors?.length) return []
   return [...product.product_colors]
@@ -216,12 +201,12 @@ function buildInitialColors(product?: Product): ColorEntry[] {
     image_url: c.image_url,
     is_visible: c.is_visible,
     sort_order: c.sort_order ?? 0,
-    images: (c.images ?? []).map(img => ({
+    images: c.images?.length ? c.images.map(img => ({
       id: img.id,
       preview: img.image_url,
       existing: true,
       sort_order: img.sort_order,
-    })),
+    })) : c.image_url ? [{ preview: c.image_url, existing: true, sort_order: 0 }] : [],
   }))
 }
 
@@ -276,7 +261,10 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   const [preparingImages, setPreparingImages] = useState(false)
   const [error, setError] = useState('')
   const [variantStocks, setVariantStocks] = useState<Record<string, string>>({})
-  const [variantStockTouched, setVariantStockTouched] = useState(false)
+  const initialStocks = useRef<Record<string, string>>({})
+  const [variantsLoaded, setVariantsLoaded] = useState(false)
+  const uploadedImages = useRef(new Map<File, string>())
+  const savingRef = useRef(false)
 
   // Drag state for size reorder
   const dragSizeIndex = useRef<number | null>(null)
@@ -291,7 +279,11 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         .select('id, product_id, color_id, size_id, stock')
         .eq('product_id', productId)
 
-      if (ignore || error || !data) return
+      if (ignore) return
+      if (error || !data) {
+        setError('تعذّر تحميل المخزون. حدّثي الصفحة قبل الحفظ.')
+        return
+      }
 
       const next = Object.fromEntries(
         (data as ProductVariant[]).map(variant => [
@@ -299,7 +291,9 @@ export default function ProductForm({ productId, initialData, categories = [] }:
           String(Math.max(0, variant.stock ?? 0)),
         ])
       )
+      initialStocks.current = next
       setVariantStocks(next)
+      setVariantsLoaded(true)
     }
 
     loadVariants()
@@ -413,7 +407,6 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   }
 
   const updateVariantStock = (colorId: string, sizeId: string, value: string) => {
-    setVariantStockTouched(true)
     setVariantStocks(prev => {
       const key = stockKey(colorId, sizeId)
       if (value === '') {
@@ -452,7 +445,9 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   // ── Save ─────────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
+    if (savingRef.current) return
     setError('')
+    if (!variantsLoaded) { setError('انتظري تحميل المخزون أو حدّثي الصفحة'); return }
     if (!name.trim()) { setError('يرجى إدخال اسم المنتج'); return }
     const originalPriceNum = Number(originalPrice)
     const hasDiscountPrice = price.trim() !== ''
@@ -478,168 +473,49 @@ export default function ProductForm({ productId, initialData, categories = [] }:
     if (activeColors.length === 0) { setError('يرجى إضافة لون واحد على الأقل'); return }
     if (activeColors.some(c => !c.name.trim())) { setError('يرجى إدخال اسم لكل لون'); return }
 
+    savingRef.current = true
     setSaving(true)
     try {
-      const supabase = createClient()
-
-      // 1. Upsert product
-      const { error: productError } = await supabase
-        .from('products')
-        .upsert({
-          id: productId,
-          name: name.trim(),
-          price: savedPrice,
-          original_price: savedOriginalPrice,
-          description: description.trim() || null,
-          is_visible: isVisible,
-          category_id: categoryId || null,
-        })
-      if (productError) throw new Error(productError.message)
-
-      // 2. Process colors
-      const activeColorIds: { sourceId: string; actualId: string }[] = []
-      const colorsToSave = normalizeColorSort(colors)
-      for (const color of colorsToSave) {
-        if (color.toDelete) {
-          // Delete all color images first
-          await supabase.from('product_color_images').delete().eq('color_id', color.id)
-          await supabase.from('product_variants').delete().eq('color_id', color.id)
-          await supabase.from('product_colors').delete().eq('id', color.id)
-          continue
-        }
-
-        let actualColorId = color.id
-
-        if (color.isNew) {
-          const { data: insertedColor, error: insertError } = await supabase
-            .from('product_colors')
-            .insert({
-              product_id: productId,
-              name: color.name.trim(),
-              hex_code: color.hex_code,
-              image_url: null,
-              is_visible: color.is_visible,
-              sort_order: color.sort_order,
-            })
-            .select('id')
-            .single()
-          if (insertError) throw new Error(insertError.message)
-          actualColorId = insertedColor!.id
-        } else {
-          const { error: updateError } = await supabase
-            .from('product_colors')
-            .update({
-              name: color.name.trim(),
-              hex_code: color.hex_code,
-              is_visible: color.is_visible,
-              sort_order: color.sort_order,
-            })
-            .eq('id', color.id)
-          if (updateError) throw new Error(updateError.message)
-        }
-
-        activeColorIds.push({ sourceId: color.id, actualId: actualColorId })
-
-        // 3. Process images for this color
-        const finalUrls: { url: string; sort_order: number }[] = []
-
-        for (const img of color.images) {
-          if (img.toDelete) {
-            if (img.id) {
-              await supabase.from('product_color_images').delete().eq('id', img.id)
-            }
-            continue
+      // Finish uploads before starting the single database transaction. Reuse
+      // successful uploads if a later upload/save fails and the admin retries.
+      const savedColors = []
+      for (const color of normalizeColorSort(activeColors)) {
+        const images = []
+        for (const img of color.images.filter(image => !image.toDelete)) {
+          let url = img.preview
+          if (!img.existing && img.file) {
+            url = uploadedImages.current.get(img.file) ?? await uploadProductImage(img.file, productId, color.id)
+            uploadedImages.current.set(img.file, url)
           }
-
-          if (img.existing) {
-            if (img.id) {
-              await supabase
-                .from('product_color_images')
-                .update({ sort_order: img.sort_order })
-                .eq('id', img.id)
-            }
-            finalUrls.push({ url: img.preview, sort_order: img.sort_order })
-          } else if (img.file) {
-            const imageUrl = await uploadProductImage(img.file, productId, actualColorId)
-            await supabase.from('product_color_images').insert({
-              color_id: actualColorId,
-              image_url: imageUrl,
-              sort_order: img.sort_order,
-            })
-            finalUrls.push({ url: imageUrl, sort_order: img.sort_order })
-          }
+          images.push({ image_url: url, sort_order: img.sort_order })
         }
-
-        // 4. Update image_url to first image for backward compat
-        const sorted = finalUrls.sort((a, b) => a.sort_order - b.sort_order)
-        await supabase
-          .from('product_colors')
-          .update({ image_url: sorted[0]?.url ?? null })
-          .eq('id', actualColorId)
+        savedColors.push({ id: color.id, name: color.name.trim(), hex_code: color.hex_code,
+          is_visible: color.is_visible, sort_order: color.sort_order, images })
       }
-
-      // 5. Process sizes
-      const activeSizeIds: { sourceId: string; actualId: string }[] = []
-      for (const size of sizes) {
-        if (size.toDelete) {
-          await supabase.from('product_variants').delete().eq('size_id', size.id)
-          await supabase.from('product_sizes').delete().eq('id', size.id)
-          continue
-        }
-        if (size.isNew) {
-          const { data: insertedSize, error: sizeInsertError } = await supabase.from('product_sizes').insert({
-            product_id: productId,
-            label: size.label,
-            is_visible: size.is_visible,
-            sort_order: size.sort_order,
-          }).select('id').single()
-          if (sizeInsertError) throw new Error(sizeInsertError.message)
-          activeSizeIds.push({ sourceId: size.id, actualId: insertedSize!.id })
-        } else {
-          const { error: sizeUpdateError } = await supabase.from('product_sizes').update({
-            label: size.label,
-            is_visible: size.is_visible,
-            sort_order: size.sort_order,
-          }).eq('id', size.id)
-          if (sizeUpdateError) throw new Error(sizeUpdateError.message)
-          activeSizeIds.push({ sourceId: size.id, actualId: size.id })
-        }
-      }
-
-      // 6. Process stock variants. Empty untouched grids keep backward-compatible unlimited stock.
-      const shouldSaveVariants = variantStockTouched || Object.keys(variantStocks).length > 0
-      if (shouldSaveVariants && activeColorIds.length > 0 && activeSizeIds.length > 0) {
-        const variantRows = activeColorIds.flatMap(color =>
-          activeSizeIds.map(size => {
-            const sourceValue = variantStocks[stockKey(color.sourceId, size.sourceId)]
-            const actualValue = variantStocks[stockKey(color.actualId, size.actualId)]
-            return {
-              product_id: productId,
-              color_id: color.actualId,
-              size_id: size.actualId,
-              stock: Math.max(0, Number(sourceValue ?? actualValue ?? 0)),
-            }
-          })
-        )
-
-        const { error: variantError } = await supabase
-          .from('product_variants')
-          .upsert(variantRows, { onConflict: 'color_id,size_id' })
-
-        if (variantError) throw new Error(variantError.message)
-      }
-
-      try {
-        await revalidateStoreProductPages(productId)
-      } catch (cacheError) {
-        console.warn('Product saved but store cache revalidation failed:', cacheError)
-      }
+      const savedSizes = sizes.filter(size => !size.toDelete).map(size => ({
+        id: size.id, label: size.label.trim(), is_visible: size.is_visible, sort_order: size.sort_order,
+      }))
+      const stockChanges = savedColors.flatMap(color => savedSizes.flatMap(size => {
+        const key = stockKey(color.id, size.id)
+        const before = initialStocks.current[key] ?? ''
+        const after = variantStocks[key] ?? ''
+        if (before === after) return []
+        return [{ color_id: color.id, size_id: size.id,
+          expected_stock: before === '' ? null : Number(before), stock: after === '' ? null : Number(after) }]
+      }))
+      await saveCatalog('product_save', {
+        product: { id: productId, name: name.trim(), price: savedPrice, original_price: savedOriginalPrice,
+          description: description.trim() || null, is_visible: isVisible, category_id: categoryId || null },
+        colors: savedColors, sizes: savedSizes, stock_changes: stockChanges,
+        expected_updated_at: initialData?.updated_at ?? null,
+      })
 
       router.push('/admin/products')
       router.refresh()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'حدث خطأ، يرجى المحاولة مجدداً')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -896,11 +772,12 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         sizes={visibleSizes}
         stocks={variantStocks}
         onChange={updateVariantStock}
+        disabled={!variantsLoaded || saving}
       />
 
       {/* Save */}
       <div className="flex gap-3 pb-8">
-        <Button onClick={handleSave} loading={saving} className="flex-1">
+        <Button onClick={handleSave} loading={saving} disabled={!variantsLoaded || preparingImages} className="flex-1">
           {isEdit ? 'حفظ التعديلات' : 'إضافة المنتج'}
         </Button>
         <Button variant="secondary" onClick={() => router.back()} className="flex-1">
@@ -917,10 +794,11 @@ interface StockGridProps {
   colors: ColorEntry[]
   sizes: SizeEntry[]
   stocks: Record<string, string>
+  disabled: boolean
   onChange: (colorId: string, sizeId: string, value: string) => void
 }
 
-function StockGrid({ colors, sizes, stocks, onChange }: StockGridProps) {
+function StockGrid({ colors, sizes, stocks, onChange, disabled }: StockGridProps) {
   return (
     <section className="bg-white rounded-xl border border-border p-5 space-y-4">
       <div className="space-y-1">
@@ -979,6 +857,7 @@ function StockGrid({ colors, sizes, stocks, onChange }: StockGridProps) {
                   <div key={size.id} className="px-2 py-2 bg-white border-r border-border">
                     <input
                       type="number"
+                      disabled={disabled}
                       min={0}
                       inputMode="numeric"
                       value={stocks[stockKey(color.id, size.id)] ?? ''}
