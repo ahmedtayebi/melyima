@@ -94,6 +94,7 @@ const post = body => catalog.POST({ json: async () => body });
     '@/lib/store-cache': cache, '@/lib/order-operation': load('lib/order-operation.ts'),
     '@/lib/order-total': load('lib/order-total.ts'), '@/lib/delivery-prices': load('lib/delivery-prices.ts'),
     '@/lib/order-ecotrack': {},
+    '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
     '@/lib/ecotrack': { WILAYA_CODE_BY_NUMBER: {}, ecotrackUpdateOrder: async () => {
       externalCalls++; externalEntered(); await external; return { success: true };
     }, ecotrackShipOrder: async () => { throw new Error('shipment overlapped edit'); } },
@@ -102,6 +103,13 @@ const post = body => catalog.POST({ json: async () => body });
   const ship = load('app/api/ecotrack/ship/route.ts', common);
   const req = { json: async () => ({ ...order, expected_updated_at: updated_at, items: [item] }) };
   const params = { params: Promise.resolve({ id }) };
+  authorized = false;
+  assert.equal((await orders.GET({}, params)).status, 401);
+  authorized = true;
+  const freshOrder = await orders.GET({}, params);
+  assert.equal(freshOrder.status, 200);
+  assert.equal(freshOrder.headers.get('Cache-Control'), 'no-store');
+  assert.equal((await freshOrder.json()).order.updated_at, updated_at);
   const editing = orders.PUT(req, params);
   await entered;
   assert.equal((await orders.PUT(req, params)).status, 409);

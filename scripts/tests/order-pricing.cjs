@@ -40,6 +40,7 @@ const route = load('app/api/orders/[id]/route.ts', {
   '@/lib/supabase/admin': { createAdminClient: () => db },
   '@/lib/ecotrack': { WILAYA_CODE_BY_NUMBER: {}, ecotrackUpdateOrder: async (tracking, data) => { calls.push(['ecotrack', data]); return {success: true}; } },
   '@/lib/order-ecotrack': {},
+  '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
   '@/lib/order-operation': { acquireOrderOperation: async () => async () => {} },
   '@/lib/store-cache': { invalidateStoreCache() {} },
   '@/lib/delivery-prices': delivery,
@@ -120,5 +121,33 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
   assert.equal((await put({...automatic, free_delivery: true})).status, 200);
   assert.equal(calls[0][1].montant, 2000);
   assert.equal(calls[1][1].p_delivery_price, 0);
+  const state = load('lib/order-edit-state.ts');
+  reset('confirmed', 'draft');
+  const base = state.orderEditState(order);
+  order.updated_at = '2026-09-28T12:15:00+00:00';
+  assert.equal((await put({...body, expected_state: base})).status, 200, 'timestamp-only updates must not reject editing');
+  reset('confirmed', 'draft');
+  order.phone = '0666666666';
+  const conflicting = await put({...body, expected_state: base});
+  assert.equal(conflicting.status, 409);
+  const conflict = await conflicting.json();
+  assert.equal(conflict.code, 'order_edit_conflict');
+  assert.equal(conflict.changes[0].key, 'phone');
+  assert.equal(conflict.changes[0].value, '0666666666');
+  assert.equal(calls.length, 0, 'real conflict must not change Ecotrack');
+  assert.equal((await put({...body, expected_state: conflict.current_state})).status, 200, 'reviewed current state permits explicit save');
+  reset();
+  assert.equal((await put({...body, expected_updated_at: '2026-09-28T12:00:00Z'})).status, 200, 'equivalent timezone strings are not conflicts');
+  reset();
+  order.updated_at = '2026-09-28T12:00:00.000001Z';
+  assert.equal((await put(body)).status, 409, 'legacy timestamp comparison must preserve microsecond differences');
+  reset('confirmed', 'shipped');
+  assert.equal((await put({...body, expected_state: base})).status, 409, 'newly shipped order cannot be edited');
+  assert.equal(calls.length, 0);
+  assert.equal((await put({...body, notes_only: true, expected_state: base, notes: 'Note'})).status, 200);
+  assert.equal(calls[0][0], 'update');
+  assert.equal(calls[0][1].notes, 'Note');
+  assert.equal(Object.keys(calls[0][1]).length, 1);
+  console.log('PASS: unchanged edit snapshots, real conflict review, equivalent timestamps, microseconds and shipped order protection');
   console.log('PASS: total validation, paid/free delivery, persistence, restored fees, changed destination, Ecotrack amount/rollback, locked orders and automatic pricing');
 })().catch(error => { console.error(error); process.exitCode = 1; });

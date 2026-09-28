@@ -10,7 +10,7 @@ function load(file, mocks = {}, append = '') {
   const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8') + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, setTimeout() {} });
+  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
   return exports;
 }
 let slots = [], cursor = 0, effects = [], firstRender = true;
@@ -90,5 +90,41 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   const chart = stats.buildChartData([{ created_at: old.toISOString() }, { created_at }], '30d');
   assert.equal(chart.length, 30);
   assert.equal(chart.reduce((sum, day) => sum + day.count, 0), 1);
+  // A real conflict must keep the administrator's draft and require review,
+  // without closing the form or silently replacing the saved order.
+  slots = []; cursor = 0; firstRender = true; effects = [];
+  const editState = load('lib/order-edit-state.ts');
+  const editOrder = { id: 'o', status: 'pending', customer_name: 'Customer', phone: '0555555555',
+    wilaya: '16', delivery_type: 'home', delivery_price: 0, total_price: 5900,
+    address: 'Address', commune: 'Alger', notes: '', updated_at: 'old',
+    order_items: [{ id: 'i', product_id: 'p', color_id: 'c', size_id: 's', quantity: 1 }] };
+  const latest = editState.orderEditState({...editOrder, phone: '0666666666'});
+  const requests = []; let saved = 0;
+  const EditForm = load('components/admin/OrderEditForm.tsx', {
+    react: {...hooks, useMemo: fn => fn()},
+    '@/lib/delivery-prices': load('lib/delivery-prices.ts'),
+    '@/lib/order-total': load('lib/order-total.ts'),
+    '@/lib/order-edit-state': editState,
+    $fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return {ok: requests.length > 1, json: async () => requests.length === 1
+        ? {success: false, code: 'order_edit_conflict', error: 'Review changes', current_state: latest,
+          changes: [{key: 'phone', label: 'Phone', value: latest.phone}]}
+        : {success: true}};
+    },
+  }).default;
+  const editTree = () => { cursor = 0; const tree = EditForm({order: editOrder, products: [], onCancel() {}, onSaved() { saved++; }}); firstRender = false; return tree; };
+  walk(editTree()).find(n => n.type === 'input' && n.props.value === '5900').props.onChange({target: {value: '5400'}});
+  await editTree().props.onSubmit({preventDefault() {}});
+  assert.equal(requests.length, 1, 'conflict must not auto-overwrite');
+  assert(walk(editTree()).some(n => n.type === 'input' && n.props.value === '5400'), 'conflict lost the entered total');
+  const review = walk(editTree()).find(n => n.type === 'button' && n.props.children === 'راجعت التغييرات، احفظ مدخلاتي');
+  review.props.onClick({preventDefault() {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].expected_state.phone, latest.phone);
+  assert.equal(requests[1].total_price, 5400);
+  assert.equal(saved, 1);
+  console.log('PASS: order edit draft preserved through conflict and saved only after explicit review');
   console.log('PASS: product dirty stock/null/zero, save failures, delivered-only revenue/rankings and chart boundaries');
 })().catch(error => { console.error(error); process.exitCode = 1; });

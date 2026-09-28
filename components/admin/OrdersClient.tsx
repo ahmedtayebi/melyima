@@ -49,6 +49,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [openingOrderId, setOpeningOrderId] = useState<string | null>(null)
+  const editorRequest = useRef(0)
   const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
@@ -61,6 +63,22 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
+  }
+
+  const openOrderEditor = async (id: string) => {
+    const request = ++editorRequest.current
+    setOpeningOrderId(id)
+    try {
+      const response = await fetch(`/api/orders/${id}`, { cache: 'no-store' })
+      const result = await response.json()
+      if (request !== editorRequest.current) return
+      if (!response.ok || !result.success || !result.order) throw new Error(result.error || 'تعذّر تحميل الطلب')
+      setEditingOrder(result.order)
+    } catch (error) {
+      if (request === editorRequest.current) showToast(error instanceof Error ? error.message : 'تعذّر تحميل الطلب', 'error')
+    } finally {
+      if (request === editorRequest.current) setOpeningOrderId(null)
+    }
   }
 
   useEffect(() => {
@@ -667,13 +685,14 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                       ) : null}
                       {!order.deleted_at && (
                         <button
-                          onClick={() => setEditingOrder(order)}
-                          disabled={isOrderBusy(order.id)}
+                          onClick={() => { void openOrderEditor(order.id) }}
+                          disabled={openingOrderId !== null || isOrderBusy(order.id)}
+                          aria-busy={openingOrderId === order.id}
                           className="p-1.5 rounded-lg text-muted hover:text-brand hover:bg-surface transition-colors disabled:opacity-50"
                           aria-label="تعديل الطلب"
                           title="تعديل الطلب"
                         >
-                          <Pencil size={15} />
+                          {openingOrderId === order.id ? <Loader2 size={15} className="animate-spin" /> : <Pencil size={15} />}
                         </button>
                       )}
                       {!order.deleted_at && order.status !== 'delivered' && order.ecotrack_status !== 'shipped' && (
@@ -864,11 +883,12 @@ export default function OrdersClient({ initialOrders, products }: Props) {
               ) : <span className="mr-auto" />}
               {!order.deleted_at && (
                 <button
-                  onClick={() => setEditingOrder(order)}
-                  disabled={isOrderBusy(order.id)}
+                  onClick={() => { void openOrderEditor(order.id) }}
+                  disabled={openingOrderId !== null || isOrderBusy(order.id)}
+                  aria-busy={openingOrderId === order.id}
                   className="flex items-center gap-1 text-xs font-heading font-bold text-brand px-3 py-1.5 rounded-lg border border-border disabled:opacity-50"
                 >
-                  <Pencil size={12} />
+                  {openingOrderId === order.id ? <Loader2 size={12} className="animate-spin" /> : <Pencil size={12} />}
                   تعديل
                 </button>
               )}

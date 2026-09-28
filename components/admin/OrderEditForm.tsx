@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Minus, Plus, Save, Trash2 } from 'lucide-react'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
 import { isValidOrderTotal } from '@/lib/order-total'
+import { orderEditState, isOrderEditState, type OrderEditState } from '@/lib/order-edit-state'
 import type { Order, Product } from '@/lib/types'
 
 type EditableItem = {
@@ -78,6 +79,11 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
   const [communesLoading, setCommunesLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState(() => orderEditState(order))
+  const [conflict, setConflict] = useState<{
+    state: OrderEditState
+    changes: { key: string; label: string; value: string }[]
+  } | null>(null)
 
   const sortedProducts = useMemo(
     () => [...products].sort((a, b) => a.name.localeCompare(b.name)),
@@ -152,9 +158,11 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
     setItems(current => current.length === 1 ? current : current.filter(item => item.key !== key))
   }
 
-  const submit = async (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent, reviewedState?: OrderEditState) => {
     event.preventDefault()
+    if (saving) return
     setError(null)
+    setConflict(null)
 
     const normalizedItems = items.map(item => ({
       product_id: item.product_id,
@@ -184,6 +192,8 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           expected_updated_at: order.updated_at,
+          expected_state: reviewedState ?? baseline,
+          notes_only: locked,
           customer_name: customerName,
           phone,
           phone2,
@@ -200,6 +210,9 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
 
       if (!response.ok || !data.success) {
         setError(data.error ?? 'تعذّر حفظ التعديلات')
+        if (data.code === 'order_edit_conflict' && isOrderEditState(data.current_state)) {
+          setConflict({ state: data.current_state, changes: Array.isArray(data.changes) ? data.changes : [] })
+        }
         return
       }
 
@@ -449,8 +462,27 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
       )}
 
       {error && (
-        <div className="border border-red-200 bg-red-50 text-red-700 rounded-lg px-4 py-3 text-sm font-body">
+        <div role="alert" className="border border-red-200 bg-red-50 text-red-700 rounded-lg px-4 py-3 text-sm font-body">
           {error}
+        </div>
+      )}
+
+      {conflict && (
+        <div className="border border-amber-200 bg-amber-50 rounded-lg px-4 py-3 space-y-3 text-sm font-body">
+          <p className="font-bold">القيم التي حُفظت أثناء التعديل:</p>
+          <ul className="space-y-2">
+            {conflict.changes.map(change => (
+              <li key={change.key}><strong>{change.label}: </strong>{change.value}</li>
+            ))}
+          </ul>
+          <p>الحفظ أدناه سيستخدم مدخلاتك الحالية بدل هذه القيم. يمكنك تعديل المدخلات قبل المتابعة.</p>
+          <button type="button" disabled={saving} className="font-heading font-bold underline disabled:opacity-50"
+            onClick={event => {
+              setBaseline(conflict.state)
+              void submit(event, conflict.state)
+            }}>
+            راجعت التغييرات، احفظ مدخلاتي
+          </button>
         </div>
       )}
 
@@ -465,7 +497,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
         </button>
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || Boolean(conflict)}
           className="inline-flex items-center justify-center gap-2 min-w-40 bg-accent text-white px-5 py-3 rounded-lg font-heading font-bold text-sm disabled:opacity-60"
         >
           {saving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />}

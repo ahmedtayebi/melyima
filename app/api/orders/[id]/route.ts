@@ -1,5 +1,6 @@
 import { acquireOrderOperation, orderBusyResponse } from '@/lib/order-operation'
 import { invalidateStoreCache } from '@/lib/store-cache'
+import { orderEditState, isOrderEditState, changedOrderEditFields, orderEditLabels, sameOrderTimestamp } from '@/lib/order-edit-state'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
@@ -181,6 +182,16 @@ async function restoreUnlimitedStockOrder(
 async function getOrderId(params: Props['params']) {
   const { id } = await params
   return UUID_PATTERN.test(id) ? id : null
+}
+
+export async function GET(_req: NextRequest, { params }: Props) {
+  const auth = await requireAdmin()
+  if (auth instanceof NextResponse) return auth
+  const id = await getOrderId(params)
+  if (!id) return NextResponse.json({ success: false, error: 'معرّف الطلب غير صحيح' }, { status: 400 })
+  const { data, error } = await createAdminClient().from('orders').select('*, order_items(*)').eq('id', id).single()
+  if (error || !data) return NextResponse.json({ success: false, error: 'تعذّر تحميل الطلب' }, { status: 404 })
+  return NextResponse.json({ success: true, order: data }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function DELETE(req: NextRequest, { params }: Props) {
@@ -494,8 +505,24 @@ export async function PUT(req: NextRequest, { params }: Props) {
     if (fetchError || !currentOrder) {
       return NextResponse.json({ success: false, error: 'الطلب غير موجود' }, { status: 404 })
     }
-    if (typeof body.expected_updated_at !== 'string' || body.expected_updated_at !== currentOrder.updated_at) {
-      return NextResponse.json({ success: false, error: 'تغيّر الطلب منذ فتح نافذة التعديل. أغلقيها وحدّثي الصفحة ثم حاولي مجددًا.' }, { status: 409 })
+    const currentState = orderEditState(currentOrder)
+    const notesOnly = body.notes_only === true
+    if (body.expected_state !== undefined && !isOrderEditState(body.expected_state)) {
+      return NextResponse.json({ success: false, error: 'بيانات نسخة الطلب غير صحيحة' }, { status: 400 })
+    }
+    const changedFields = isOrderEditState(body.expected_state)
+      ? changedOrderEditFields(body.expected_state, currentState, notesOnly)
+      : []
+    if (changedFields.length || (!isOrderEditState(body.expected_state) && !sameOrderTimestamp(body.expected_updated_at, currentOrder.updated_at))) {
+      return NextResponse.json({
+        success: false, code: 'order_edit_conflict',
+        error: 'توجد بيانات أحدث لهذا الطلب. مدخلاتك محفوظة في النافذة؛ راجعي التغييرات أدناه قبل الحفظ.',
+        current_state: currentState,
+        changes: changedFields.map(key => ({ key, label: orderEditLabels[key], value: key === 'items'
+          ? (currentOrder.order_items ?? []).map(item => `${item.product_name} — ${item.color_name} — ${item.size_label} × ${item.quantity}`).join('، ')
+          : key === 'delivery_type' ? (currentState[key] === 'home' ? 'المنزل' : 'المكتب')
+          : key === 'wilaya' ? currentOrder.wilaya_name ?? currentState[key] : currentState[key] || 'فارغ' })),
+      }, { status: 409 })
     }
     if (currentOrder.deleted_at) {
       return NextResponse.json({ success: false, error: 'استرجع الطلب من المحذوفات قبل تعديله' }, { status: 409 })
@@ -504,6 +531,16 @@ export async function PUT(req: NextRequest, { params }: Props) {
     // A zero customer delivery charge is persisted in the existing order field.
     const currentFreeDelivery = Number(currentOrder.delivery_price) === 0
     const freeDelivery = body.free_delivery ?? currentFreeDelivery
+
+    if (notesOnly) {
+      const { error } = await supabase.from('orders').update({ notes: notes || null }).eq('id', id)
+      if (error) return NextResponse.json({ success: false, error: 'تعذّر حفظ الملاحظة' }, { status: 500 })
+      return NextResponse.json({ success: true, limited: true })
+    }
+
+    if (isOrderEditState(body.expected_state) && (currentOrder.status === 'delivered' || currentOrder.status === 'cancelled' || currentOrder.ecotrack_status === 'shipped')) {
+      return NextResponse.json({ success: false, error: 'أصبح الطلب مُرسلًا للشحن أو مغلقًا، ولا يمكن تعديل بياناته. مدخلاتك ما زالت موجودة في النافذة.' }, { status: 409 })
+    }
 
     if (
       currentOrder.status === 'delivered' ||
