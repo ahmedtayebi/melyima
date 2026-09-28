@@ -68,6 +68,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
   const [phone2, setPhone2] = useState(order.phone2 ?? '')
   const [wilaya, setWilaya] = useState(order.wilaya.padStart(2, '0'))
   const [deliveryType, setDeliveryType] = useState<'home' | 'office'>(order.delivery_type)
+  const [freeDelivery, setFreeDelivery] = useState(Number(order.delivery_price) === 0)
   const [commune, setCommune] = useState(order.commune ?? '')
   const [address, setAddress] = useState(order.address ?? '')
   const [notes, setNotes] = useState(order.notes ?? '')
@@ -103,15 +104,33 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
   }, [deliveryType, locked, wilaya])
 
   const deliveryEntry = DELIVERY_PRICES.find(entry => entry.code === wilaya)
-  const deliveryPrice = deliveryEntry
+  const standardDeliveryPrice = deliveryEntry
     ? (deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office)
     : 0
+  const deliveryPrice = freeDelivery ? 0 : standardDeliveryPrice
   const productsTotal = items.reduce((total, item) => {
     const product = products.find(entry => entry.id === item.product_id)
     return total + (product?.price ?? 0) * item.quantity
   }, 0)
   const finalTotal = totalPrice.trim() === '' ? NaN : Number(totalPrice)
   const validTotal = isValidOrderTotal(finalTotal, deliveryPrice)
+
+  const changeDelivery = (nextWilaya: string, nextType: 'home' | 'office', nextFree: boolean) => {
+    const nextEntry = DELIVERY_PRICES.find(entry => entry.code === nextWilaya)
+    const nextPrice = nextFree ? 0 : (nextEntry?.[nextType] ?? 0)
+
+    // Preserve the agreed product amount, including any manual discount.
+    setTotalPrice(current => {
+      const total = current.trim() === '' ? NaN : Number(current)
+      return isValidOrderTotal(total, deliveryPrice)
+        ? String(Math.round((total - deliveryPrice + nextPrice) * 100) / 100)
+        : current
+    })
+    if (nextWilaya !== wilaya || nextType !== deliveryType) setCommune('')
+    setWilaya(nextWilaya)
+    setDeliveryType(nextType)
+    setFreeDelivery(nextFree)
+  }
 
   const updateItem = (key: string, values: Partial<EditableItem>) => {
     setItems(current => current.map(item => item.key === key ? { ...item, ...values } : item))
@@ -173,7 +192,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
           address,
           notes,
           items: normalizedItems,
-          ...(!locked && { total_price: finalTotal }),
+          ...(!locked && { total_price: finalTotal, free_delivery: freeDelivery }),
         }),
       })
       const data = await response.json()
@@ -239,10 +258,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
             <select
               value={wilaya}
               disabled={locked}
-              onChange={event => {
-                setWilaya(event.target.value)
-                setCommune('')
-              }}
+              onChange={event => changeDelivery(event.target.value, deliveryType, freeDelivery)}
             >
               {DELIVERY_PRICES.map(entry => (
                 <option key={entry.code} value={entry.code}>{entry.code} - {entry.name}</option>
@@ -260,10 +276,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
                   key={value}
                   type="button"
                   disabled={locked}
-                  onClick={() => {
-                    setDeliveryType(value)
-                    setCommune('')
-                  }}
+                  onClick={() => changeDelivery(wilaya, value, freeDelivery)}
                   className={deliveryType === value ? 'bg-brand text-white font-bold' : 'bg-white text-muted'}
                 >
                   {label}
@@ -387,6 +400,22 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
 
       {!locked && (
         <section className="bg-white border border-border rounded-lg p-4 sm:p-6 space-y-4">
+          <label className="flex items-start gap-3 rounded-lg border border-border bg-surface p-4">
+            <input
+              type="checkbox"
+              checked={freeDelivery}
+              disabled={locked}
+              onChange={event => changeDelivery(wilaya, deliveryType, event.target.checked)}
+              className="mt-1 h-4 w-4 accent-accent"
+              aria-describedby="free-delivery-help"
+            />
+            <span>
+              <span className="block font-heading font-bold text-sm text-brand">توصيل مجاني</span>
+              <span id="free-delivery-help" className="block text-xs text-muted font-body mt-1">
+                إعفاء الزبون من رسوم التوصيل لهذه الطلبية. تكلفة شركة التوصيل تبقى على المتجر.
+              </span>
+            </span>
+          </label>
           <Field label="إجمالي الطلبية شامل التوصيل (دج)">
             <input
               type="number"
@@ -412,7 +441,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
           </button>
           <div className="bg-surface rounded-lg px-4 py-4 grid grid-cols-3 gap-3 text-center">
             <Price label="المنتجات بعد التعديل" value={validTotal ? Math.round((finalTotal - deliveryPrice) * 100) / 100 : 0} />
-            <Price label="التوصيل" value={deliveryPrice} />
+            <Price label={freeDelivery ? 'التوصيل (مجاني)' : 'التوصيل'} value={deliveryPrice} />
             <Price label="الإجمالي" value={validTotal ? finalTotal : 0} accent />
           </div>
         </section>

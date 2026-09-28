@@ -757,7 +757,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-muted font-body">التوصيل:</span>
                             <span className="text-xs font-heading font-bold text-brand">
-                              {order.delivery_price?.toLocaleString('ar-DZ')} دج
+                              {Number(order.delivery_price) === 0 ? 'مجاني' : `${order.delivery_price?.toLocaleString('ar-DZ')} دج`}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
@@ -922,7 +922,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                   <div>
                     <span className="text-muted font-body">التوصيل: </span>
                     <span className="font-heading font-bold text-brand">
-                      {order.delivery_price?.toLocaleString('ar-DZ')} دج
+                      {Number(order.delivery_price) === 0 ? 'مجاني' : `${order.delivery_price?.toLocaleString('ar-DZ')} دج`}
                     </span>
                   </div>
                   <div>

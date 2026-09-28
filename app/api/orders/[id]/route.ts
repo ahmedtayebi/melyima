@@ -450,6 +450,10 @@ export async function PUT(req: NextRequest, { params }: Props) {
     const notes = String(body.notes ?? '').trim()
     const items = Array.isArray(body.items) ? body.items as IncomingOrderItem[] : []
 
+    if (body.free_delivery !== undefined && typeof body.free_delivery !== 'boolean') {
+      return NextResponse.json({ success: false, error: 'خيار التوصيل المجاني غير صحيح' }, { status: 400 })
+    }
+
     if (notes.length > 1000) {
       return NextResponse.json({ success: false, error: 'الملاحظة طويلة جدًا' }, { status: 400 })
     }
@@ -473,12 +477,19 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'استرجع الطلب من المحذوفات قبل تعديله' }, { status: 409 })
     }
 
+    // A zero customer delivery charge is persisted in the existing order field.
+    const currentFreeDelivery = Number(currentOrder.delivery_price) === 0
+    const freeDelivery = body.free_delivery ?? currentFreeDelivery
+
     if (
       currentOrder.status === 'delivered' ||
       currentOrder.status === 'cancelled' ||
       currentOrder.ecotrack_status === 'shipped'
     ) {
-      if (body.total_price !== undefined && body.total_price !== Number(currentOrder.total_price)) {
+      if (
+        (body.total_price !== undefined && body.total_price !== Number(currentOrder.total_price)) ||
+        freeDelivery !== currentFreeDelivery
+      ) {
         return NextResponse.json({ success: false, error: 'لا يمكن تعديل مبلغ طلب مُرسل أو مُسلَّم أو ملغي' }, { status: 409 })
       }
       const { error } = await supabase.from('orders').update({ notes: notes || null }).eq('id', id)
@@ -518,7 +529,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: 'لا يمكن تعديل الطلب بهذه الحالة' }, { status: 409 })
     }
 
-    const deliveryPrice = deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office
+    const deliveryPrice = freeDelivery ? 0 : (deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office)
     if (body.total_price !== undefined && !isValidOrderTotal(body.total_price, deliveryPrice)) {
       return NextResponse.json(
         { success: false, error: 'أدخلي إجماليًا صحيحًا لا يقل عن سعر التوصيل، بمنزلتين عشريتين كحد أقصى' },
