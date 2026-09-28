@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Minus, Plus, Save, Trash2 } from 'lucide-react'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { isValidOrderTotal } from '@/lib/order-total'
 import type { Order, Product } from '@/lib/types'
 
 type EditableItem = {
@@ -70,6 +71,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
   const [commune, setCommune] = useState(order.commune ?? '')
   const [address, setAddress] = useState(order.address ?? '')
   const [notes, setNotes] = useState(order.notes ?? '')
+  const [totalPrice, setTotalPrice] = useState(String(order.total_price))
   const [items, setItems] = useState<EditableItem[]>(() => initialItems(order))
   const [communes, setCommunes] = useState<CommuneOption[]>([])
   const [communesLoading, setCommunesLoading] = useState(false)
@@ -108,6 +110,8 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
     const product = products.find(entry => entry.id === item.product_id)
     return total + (product?.price ?? 0) * item.quantity
   }, 0)
+  const finalTotal = totalPrice.trim() === '' ? NaN : Number(totalPrice)
+  const validTotal = isValidOrderTotal(finalTotal, deliveryPrice)
 
   const updateItem = (key: string, values: Partial<EditableItem>) => {
     setItems(current => current.map(item => item.key === key ? { ...item, ...values } : item))
@@ -149,6 +153,10 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
       setError('نفس المنتج واللون والمقاس مكرر داخل الطلب')
       return
     }
+    if (!locked && !validTotal) {
+      setError('أدخلي إجماليًا صحيحًا لا يقل عن سعر التوصيل، بمنزلتين عشريتين كحد أقصى')
+      return
+    }
 
     setSaving(true)
     try {
@@ -165,6 +173,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
           address,
           notes,
           items: normalizedItems,
+          ...(!locked && { total_price: finalTotal }),
         }),
       })
       const data = await response.json()
@@ -377,11 +386,36 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
       </section>
 
       {!locked && (
-        <div className="bg-surface border-y border-border px-4 py-4 grid grid-cols-3 gap-3 text-center">
-          <Price label="المنتجات" value={productsTotal} />
-          <Price label="التوصيل" value={deliveryPrice} />
-          <Price label="الإجمالي" value={productsTotal + deliveryPrice} accent />
-        </div>
+        <section className="bg-white border border-border rounded-lg p-4 sm:p-6 space-y-4">
+          <Field label="إجمالي الطلبية شامل التوصيل (دج)">
+            <input
+              type="number"
+              inputMode="decimal"
+              min={deliveryPrice}
+              step="0.01"
+              required
+              value={totalPrice}
+              onChange={event => setTotalPrice(event.target.value)}
+              aria-describedby="order-total-help"
+            />
+          </Field>
+          <p id="order-total-help" className="text-xs text-muted font-body">
+            هذا هو المبلغ النهائي المطلوب من الزبون لهذه الطلبية فقط، شاملًا التوصيل.
+            يبقى المبلغ المدخل ثابتًا عند تعديل المنتجات، ويمكن إعادة حسابه بالزر أدناه.
+          </p>
+          <button
+            type="button"
+            onClick={() => setTotalPrice(String(Math.round((productsTotal + deliveryPrice) * 100) / 100))}
+            className="text-sm font-heading font-bold text-accent underline underline-offset-4"
+          >
+            استخدام المبلغ المحسوب: {(productsTotal + deliveryPrice).toLocaleString('ar-DZ')} دج
+          </button>
+          <div className="bg-surface rounded-lg px-4 py-4 grid grid-cols-3 gap-3 text-center">
+            <Price label="المنتجات بعد التعديل" value={validTotal ? Math.round((finalTotal - deliveryPrice) * 100) / 100 : 0} />
+            <Price label="التوصيل" value={deliveryPrice} />
+            <Price label="الإجمالي" value={validTotal ? finalTotal : 0} accent />
+          </div>
+        </section>
       )}
 
       {error && (

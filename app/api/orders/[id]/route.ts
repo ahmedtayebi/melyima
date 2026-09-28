@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { ecotrackUpdateOrder, WILAYA_CODE_BY_NUMBER } from '@/lib/ecotrack'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
+import { isValidOrderTotal } from '@/lib/order-total'
 import {
   ensureEcotrackDraft,
   isInvalidEcotrackTracking,
@@ -61,6 +62,9 @@ function normalizePhone(value: unknown) {
 }
 
 function orderError(message: string) {
+  if (message.includes('invalid_total_price')) {
+    return { status: 400, error: 'إجمالي الطلبية غير صحيح أو أقل من سعر التوصيل' }
+  }
   if (message.includes('insufficient_stock')) {
     return { status: 409, error: 'المخزون غير كافٍ لأحد المنتجات أو المقاسات' }
   }
@@ -474,6 +478,9 @@ export async function PUT(req: NextRequest, { params }: Props) {
       currentOrder.status === 'cancelled' ||
       currentOrder.ecotrack_status === 'shipped'
     ) {
+      if (body.total_price !== undefined && body.total_price !== Number(currentOrder.total_price)) {
+        return NextResponse.json({ success: false, error: 'لا يمكن تعديل مبلغ طلب مُرسل أو مُسلَّم أو ملغي' }, { status: 409 })
+      }
       const { error } = await supabase.from('orders').update({ notes: notes || null }).eq('id', id)
       if (error) {
         return NextResponse.json({ success: false, error: 'تعذّر حفظ الملاحظة' }, { status: 500 })
@@ -512,6 +519,12 @@ export async function PUT(req: NextRequest, { params }: Props) {
     }
 
     const deliveryPrice = deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office
+    if (body.total_price !== undefined && !isValidOrderTotal(body.total_price, deliveryPrice)) {
+      return NextResponse.json(
+        { success: false, error: 'أدخلي إجماليًا صحيحًا لا يقل عن سعر التوصيل، بمنزلتين عشريتين كحد أقصى' },
+        { status: 400 }
+      )
+    }
     const rpcItems = items.map(item => ({
       product_id: String(item.product_id),
       color_id: String(item.color_id),
@@ -589,7 +602,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
       adresse: (deliveryType === 'home' ? address : commune).substring(0, 255),
       commune,
       wilaya: Number(deliveryEntry.code),
-      montant: productsTotal + deliveryPrice,
+      montant: body.total_price ?? productsTotal + deliveryPrice,
       tel: phone,
       tel2: phone2 ?? '',
       product: productLabels.join(', ').substring(0, 255),
@@ -703,6 +716,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
       p_commune: commune,
       p_notes: notes || null,
       p_items: rpcItems,
+      p_total_price: body.total_price ?? null,
     })
 
     if (error) {
