@@ -38,3 +38,23 @@ end; $$;
 SQL
 wait "$checkout_pid"
 echo 'PASS: concurrent checkout reservation cannot be overwritten by a stale inventory save'
+
+psql -h "$test_dir" -p 55439 -d postgres -X -q -f scripts/tests/order-restoration.sql
+psql -h "$test_dir" -p 55439 -d postgres -X -q -v ON_ERROR_STOP=1 >"$test_dir/restore.log" <<SQL &
+begin;
+select restore_order_safely('99999999-9999-4999-8999-999999999999');
+\! touch "$test_dir/restoring"
+select pg_sleep(1);
+commit;
+SQL
+restore_pid=$!
+while [ ! -f "$test_dir/restoring" ]; do sleep 0.05; done
+psql -h "$test_dir" -p 55439 -d postgres -X -q -v ON_ERROR_STOP=1 <<'SQL'
+do $$ declare result jsonb; begin
+ result:=restore_order_safely('99999999-9999-4999-8999-999999999999');
+ assert (result->>'already_restored')::boolean;
+ assert (select stock=3 from product_variants where size_id='33333333-3333-4333-8333-333333333333');
+end; $$;
+SQL
+wait "$restore_pid"
+echo 'PASS: simultaneous restore retries reserve stock only once'

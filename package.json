@@ -8,7 +8,7 @@
     "start": "next start",
     "migrate:cloudinary": "node scripts/migrate-supabase-images-to-cloudinary.mjs",
     "lint": "eslint",
-    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs",
+    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs && node scripts/tests/order-restoration.cjs",
     "test:admin:db": "bash scripts/tests/run-admin-db-tests.sh"
   },
   "dependencies": {

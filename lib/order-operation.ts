@@ -6,6 +6,7 @@ type Database = ReturnType<typeof createAdminClient>
 
 export const orderBusyResponse = () => NextResponse.json({
   success: false,
+  code: 'order_operation_busy',
   error: 'توجد عملية أخرى على هذا الطلب. انتظري اكتمالها ثم حدّثي الصفحة وحاولي مجددًا.',
 }, { status: 409 })
 

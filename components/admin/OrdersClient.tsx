@@ -5,6 +5,8 @@ import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Load
 import { cn } from '@/lib/utils'
 import Modal from '@/components/ui/Modal'
 import OrderEditForm from '@/components/admin/OrderEditForm'
+import OrderRestoreForm from '@/components/admin/OrderRestoreForm'
+import type { RestoreIssue } from '@/lib/order-restoration'
 import type { Order, Product } from '@/lib/types'
 
 type OrderStatus = 'pending' | 'confirmed' | 'delivered' | 'cancelled'
@@ -49,6 +51,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [restoreProblem, setRestoreProblem] = useState<{ order: Order; issues: RestoreIssue[] } | null>(null)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
   const [openingOrderId, setOpeningOrderId] = useState<string | null>(null)
   const editorRequest = useRef(0)
   const [ecotrackLoading, setEcotrackLoading] = useState<Record<string, boolean>>({})
@@ -344,7 +348,15 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     })
   }
 
+  const finishRestore = (order: Order, alreadyRestored: boolean) => {
+    setOrders(prev => prev.map(item => item.id === order.id ? order : item))
+    setRestoreProblem(null)
+    setRestoreError(null)
+    showToast(alreadyRestored ? 'الطلب موجود بالفعل خارج المحذوفات؛ تم تحديث حالته.' : 'تم استرجاع الطلب والتحقق من المخزون', 'success')
+  }
+
   const restoreOrder = async (order: Order) => {
+    setRestoreError(null)
     setLoading(order.id, 'restore', true)
     try {
       const res = await fetch(`/api/orders/${order.id}`, {
@@ -353,24 +365,15 @@ export default function OrdersClient({ initialOrders, products }: Props) {
         body: JSON.stringify({ action: 'restore' }),
       })
       const data = await res.json()
-      if (data.success) {
-        setOrders(prev => prev.map(item => item.id === order.id
-          ? {
-              ...item,
-              status: 'pending',
-              deleted_at: null,
-              deleted_from_status: null,
-              ecotrack_tracking: null,
-              ecotrack_status: 'none' as const,
-            }
-          : item
-        ))
-        showToast('تم استرجاع الطلب وحجز المخزون', 'success')
+      if (res.ok && data.success && data.order) {
+        finishRestore(data.order, Boolean(data.already_restored))
+      } else if (Array.isArray(data.issues) && data.issues.length) {
+        setRestoreProblem({ order, issues: data.issues })
       } else {
-        showToast('خطأ: ' + (data.error ?? 'تعذّر استرجاع الطلب'), 'error')
+        setRestoreError(`#${order.id.slice(-8)}: ${data.error ?? 'تعذّر استرجاع الطلب'}`)
       }
     } catch {
-      showToast('تعذّر الاتصال بالخادم أثناء استرجاع الطلب', 'error')
+      setRestoreError('تعذّر الاتصال بالخادم أثناء استرجاع الطلب. يمكنك إعادة المحاولة.')
     } finally {
       setLoading(order.id, 'restore', false)
     }
@@ -504,6 +507,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   // ── Render ────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      {restoreError && <p role="alert" className="border border-red-200 bg-red-50 text-red-700 rounded-lg p-4">{restoreError}</p>}
       {/* Header */}
       <div className="flex items-center gap-3">
         <h1 className="font-heading font-black text-2xl text-brand">الطلبات</h1>
@@ -983,6 +987,10 @@ export default function OrdersClient({ initialOrders, products }: Props) {
         </div>
       )}
 
+      <Modal isOpen={Boolean(restoreProblem)} onClose={() => setRestoreProblem(null)} size="wide">
+        {restoreProblem && <OrderRestoreForm order={restoreProblem.order} initialIssues={restoreProblem.issues}
+          onRestored={finishRestore} onCancel={() => setRestoreProblem(null)} />}
+      </Modal>
       <Modal
         isOpen={Boolean(editingOrder)}
         onClose={() => setEditingOrder(null)}

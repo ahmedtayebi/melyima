@@ -10,7 +10,7 @@ function load(file, mocks = {}, append = '') {
   const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8') + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
+  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
   return exports;
 }
 let slots = [], cursor = 0, effects = [], firstRender = true;
@@ -126,5 +126,29 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   assert.equal(requests[1].total_price, 5400);
   assert.equal(saved, 1);
   console.log('PASS: order edit draft preserved through conflict and saved only after explicit review');
+  slots = []; cursor = 0; firstRender = true; effects = [];
+  let restoredOrder = null; const restoreRequests = [];
+  const RestoreForm = load('components/admin/OrderRestoreForm.tsx', {
+    react: hooks,
+    $fetch: async (_url, init) => {
+      if (init?.method !== 'PATCH') return {ok: true, json: async () => ({success: true, order: {...editOrder, updated_at: '2026-09-29T00:00:00Z'},
+        products: [{id: 'p', name: 'Dress', product_colors: [{id: 'c', name: 'Black', is_visible: true}], product_sizes: [{id: 's', label: 'M', is_visible: true}]}]})};
+      restoreRequests.push(JSON.parse(init.body));
+      return {ok: true, json: async () => ({success: true, already_restored: true, order: {...editOrder, status: 'confirmed'}})};
+    },
+  }).default;
+  const restoreTree = () => { cursor = 0; const tree = RestoreForm({order: editOrder,
+    initialIssues: [{item_id: 'i', product_id: 'p', color_id: 'c', size_id: null, reason: 'missing_size', product_name: 'Dress', color_name: 'Black', size_label: 'Removed', quantity: 1}],
+    onRestored: o => { restoredOrder = o; }, onCancel() {}}); firstRender = false; return tree; };
+  restoreTree(); effects.forEach(fn => fn()); await new Promise(resolve => setImmediate(resolve));
+  await restoreTree().props.onSubmit({preventDefault() {}});
+  assert.equal(restoreRequests.length, 0, 'missing size must not be replaced without explicit selection');
+  walk(restoreTree()).find(n => n.type === 'select' && n.props.value === '').props.onChange({target: {value: 's'}});
+  await restoreTree().props.onSubmit({preventDefault() {}});
+  assert.equal(restoreRequests.length, 1);
+  assert.equal(restoreRequests[0].repairs[0].size_id, 's');
+  assert.equal(restoreRequests[0].expected_updated_at, '2026-09-29T00:00:00Z');
+  assert.equal(restoredOrder.status, 'confirmed');
+  console.log('PASS: restore dialog requires explicit missing-option selection and preserves canonical server status');
   console.log('PASS: product dirty stock/null/zero, save failures, delivered-only revenue/rankings and chart boundaries');
 })().catch(error => { console.error(error); process.exitCode = 1; });

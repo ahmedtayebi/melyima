@@ -95,6 +95,7 @@ const post = body => catalog.POST({ json: async () => body });
     '@/lib/order-total': load('lib/order-total.ts'), '@/lib/delivery-prices': load('lib/delivery-prices.ts'),
     '@/lib/order-ecotrack': {},
     '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
+  '@/lib/order-restoration': load('lib/order-restoration.ts'),
     '@/lib/ecotrack': { WILAYA_CODE_BY_NUMBER: {}, ecotrackUpdateOrder: async () => {
       externalCalls++; externalEntered(); await external; return { success: true };
     }, ecotrackShipOrder: async () => { throw new Error('shipment overlapped edit'); } },

@@ -41,6 +41,7 @@ const route = load('app/api/orders/[id]/route.ts', {
   '@/lib/ecotrack': { WILAYA_CODE_BY_NUMBER: {}, ecotrackUpdateOrder: async (tracking, data) => { calls.push(['ecotrack', data]); return {success: true}; } },
   '@/lib/order-ecotrack': {},
   '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
+  '@/lib/order-restoration': load('lib/order-restoration.ts'),
   '@/lib/order-operation': { acquireOrderOperation: async () => async () => {} },
   '@/lib/store-cache': { invalidateStoreCache() {} },
   '@/lib/delivery-prices': delivery,

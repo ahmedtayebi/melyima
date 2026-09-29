@@ -57,6 +57,9 @@ export async function POST(request: Request) {
       default: return invalid()
     }
     if (result.error) {
+      if (result.error.message.includes('order_option_in_use')) {
+        return NextResponse.json({ success: false, error: 'لا يمكن حذف منتج أو لون أو مقاس مرتبط بطلب، حتى لو كان الطلب في المحذوفات. استخدمي الإخفاء للحفاظ على بيانات الطلبات.' }, { status: 409 })
+      }
       const conflict = ['stock_conflict', 'product_conflict', 'product_unavailable'].includes(result.error.message)
       console.error('Catalog save failed:', body.action, result.error)
       return NextResponse.json({ success: false, error: conflict
