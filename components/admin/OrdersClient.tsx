@@ -7,6 +7,7 @@ import Modal from '@/components/ui/Modal'
 import OrderEditForm from '@/components/admin/OrderEditForm'
 import OrderRestoreForm from '@/components/admin/OrderRestoreForm'
 import OrderLabelsTab from '@/components/admin/OrderLabelsTab'
+import { canBulkOrder, runOrderBatch, type BulkOrderAction, type BulkOrderResult } from '@/lib/bulk-orders'
 import type { RestoreIssue } from '@/lib/order-restoration'
 import type { Order, Product } from '@/lib/types'
 
@@ -50,6 +51,19 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   const [orders, setOrders] = useState<Order[]>(initialOrders)
   const [filter, setFilter] = useState<FilterType>('all')
   const [search, setSearch] = useState('')
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const bulkRunning = useRef(false)
+  const bulkStop = useRef(false)
+  const bulkRefreshVersion = useRef(0)
+  const [bulkReport, setBulkReport] = useState<{ action: BulkOrderAction; total: number; results: BulkOrderResult[] } | null>(null)
+  useEffect(() => () => { bulkStop.current = true }, [])
+  useEffect(() => {
+    if (!bulkBusy) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [bulkBusy])
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -102,17 +116,18 @@ export default function OrdersClient({ initialOrders, products }: Props) {
     let ignore = false
 
     const refreshOrders = async (force = false) => {
-      if (document.hidden || confirmDialog) return
+      if (document.hidden || confirmDialog || bulkRunning.current) return
       if (Object.values(ecotrackLoadingRef.current).some(Boolean)) return
 
       const now = Date.now()
       if (!force && now - lastRefreshAt.current < ADMIN_ORDERS_REFRESH_MS) return
       lastRefreshAt.current = now
+      const refreshVersion = bulkRefreshVersion.current
 
       try {
         const res = await fetch('/api/admin/orders', { cache: 'no-store' })
         const data = await res.json()
-        if (!ignore && res.ok && data.success && Array.isArray(data.orders)) {
+        if (!ignore && !bulkRunning.current && refreshVersion === bulkRefreshVersion.current && res.ok && data.success && Array.isArray(data.orders)) {
           setOrders(data.orders)
         }
       } catch {
@@ -168,15 +183,54 @@ export default function OrdersClient({ initialOrders, products }: Props) {
   }, [orders, filter, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE))
-  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE)
+  const currentPage = Math.min(page, totalPages)
+  const paginated = filtered.slice((currentPage - 1) * PER_PAGE, currentPage * PER_PAGE)
 
-  const handleFilter = (f: FilterType) => { setFilter(f); setPage(1) }
+  const handleFilter = (f: FilterType) => { if (bulkRunning.current) return; setFilter(f); setPage(1); setSelectedOrders(new Set()) }
   const handleSearch = (v: string) => { setSearch(v); setPage(1) }
+
+  const bulkAction: BulkOrderAction | null = filter === 'pending' ? 'confirm' : filter === 'confirmed' ? 'ship' : null
+  const eligible = bulkAction ? filtered.filter(order => canBulkOrder(order, bulkAction)) : []
+  const selectedEligible = bulkAction ? orders.filter(order => selectedOrders.has(order.id) && canBulkOrder(order, bulkAction)) : []
+  const allSelected = eligible.length > 0 && eligible.every(order => selectedOrders.has(order.id))
+  const toggleSelected = (ids: string[], checked: boolean) => setSelectedOrders(previous => {
+    const next = new Set(previous)
+    for (const id of ids) { if (checked) next.add(id); else next.delete(id) }
+    return next
+  })
+  const requestBulk = (batch: Order[], action: BulkOrderAction) => {
+    if (bulkRunning.current || !batch.length || Object.values(ecotrackLoadingRef.current).some(Boolean)) return
+    setConfirmDialog({
+      message: action === 'confirm'
+        ? `تأكيد ${batch.length} طلبات وتجهيز بوالصها؟ لن تُرسل للشحن في هذه الخطوة.`
+        : `إرسال ${batch.length} طلبات للشحن بإجمالي ${batch.reduce((sum, order) => sum + Number(order.total_price), 0).toLocaleString('ar-DZ')} دج؟ لا يمكن التراجع عن الإرسال.`,
+      onConfirm: async () => {
+        if (bulkRunning.current) return
+        bulkRunning.current = true; bulkStop.current = false
+        bulkRefreshVersion.current++
+        setConfirmDialog(null); setBulkBusy(true)
+        setBulkReport({ action, total: batch.length, results: [] })
+        try {
+          await runOrderBatch(batch, action, result => {
+            setOrders(previous => previous.map(order => order.id === result.id ? { ...order, ...result.patch } : order))
+            setBulkReport(previous => previous ? { ...previous, results: [...previous.results, result] } : previous)
+            if (result.success) toggleSelected([result.id], false)
+          }, () => bulkStop.current)
+        } finally {
+          bulkRunning.current = false; setBulkBusy(false); setPage(1)
+        }
+      },
+    })
+  }
+  const selectionCheckbox = (order: Order) => bulkAction && canBulkOrder(order, bulkAction) ? <input
+    type="checkbox" aria-label={`تحديد طلب ${order.customer_name}`} checked={selectedOrders.has(order.id)}
+    disabled={bulkBusy || Object.values(ecotrackLoading).some(Boolean)} className="accent-brand h-4 w-4"
+    onChange={event => toggleSelected([order.id], event.target.checked)} /> : null
 
   // ── Ecotrack helpers ──────────────────────────────────────
   const setLoading = (id: string, action: string, val: boolean) =>
     setEcotrackLoading(prev => ({ ...prev, [`${id}-${action}`]: val }))
-  const isOrderBusy = (id: string) => Object.entries(ecotrackLoading).some(
+  const isOrderBusy = (id: string) => bulkBusy || Object.entries(ecotrackLoading).some(
     ([key, value]) => value && key.startsWith(`${id}-`)
   )
 
@@ -529,7 +583,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
         ].map(({ key, label, count }) => (
           <button
             key={key}
-            onClick={() => handleFilter(key)}
+            disabled={bulkBusy}
+              onClick={() => handleFilter(key)}
             className={cn(
               'rounded-xl border-2 p-4 text-right transition-all',
               filter === key
@@ -553,6 +608,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           {FILTER_TABS.map(({ key, label }) => (
             <button
               key={key}
+              disabled={bulkBusy}
               onClick={() => handleFilter(key)}
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-heading font-bold whitespace-nowrap transition-colors',
@@ -566,6 +622,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
         {filter !== 'labels' && <div className="relative flex-1">
           <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
           <input
+            disabled={bulkBusy}
             value={search}
             onChange={e => handleSearch(e.target.value)}
             placeholder="بحث بالاسم أو الهاتف..."
@@ -574,12 +631,44 @@ export default function OrdersClient({ initialOrders, products }: Props) {
         </div>}
       </div>
 
+      {bulkAction && <div className="bg-white border border-border rounded-xl p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allSelected}
+            disabled={bulkBusy || !eligible.length || Object.values(ecotrackLoading).some(Boolean)}
+            onChange={event => toggleSelected(eligible.map(order => order.id), event.target.checked)} />
+            تحديد كل الطلبات المؤهلة في النتائج ({eligible.length}) عبر جميع الصفحات
+          </label>
+          <span className="text-sm">{selectedEligible.length} محددة</span>
+          <button disabled={bulkBusy || !selectedEligible.length || Object.values(ecotrackLoading).some(Boolean)}
+            onClick={() => requestBulk(selectedEligible, bulkAction)}
+            className="bg-accent text-white rounded-lg px-4 py-2 font-bold disabled:opacity-50">
+            {bulkAction === 'confirm' ? 'تأكيد الطلبات المحددة' : 'إرسال المحددة للشحن'}
+          </button>
+          <button disabled={bulkBusy || !selectedOrders.size} onClick={() => setSelectedOrders(new Set())} className="text-sm underline disabled:opacity-50">إلغاء التحديد</button>
+        </div>
+        {bulkAction === 'ship' && <p className="text-sm text-muted">التحديد متاح للطلبات التي لديها بوليصة جاهزة فقط. أنشئي بوليصة الطلب أولًا إذا لم تظهر خانة التحديد.</p>}
+      </div>}
+      {bulkReport && <div className="border border-border rounded-xl bg-white p-4 space-y-3" aria-label="نتائج العملية الجماعية">
+        <p role="status" className="font-bold">{bulkBusy ? 'جارٍ التنفيذ' : 'انتهى التنفيذ'}: {bulkReport.results.length} / {bulkReport.total} · نجحت {bulkReport.results.filter(result => result.success).length} · لم تكتمل {bulkReport.results.filter(result => !result.success).length}</p>
+        {bulkBusy ? <button className="underline" onClick={() => { bulkStop.current = true }}>إيقاف بعد الطلب الجاري</button>
+          : <div className="flex flex-wrap gap-4">
+            {bulkReport.results.some(result => !result.success) && <button className="text-accent font-bold underline"
+              onClick={() => requestBulk(orders.filter(order => bulkReport.results.some(result => result.id === order.id && !result.success)), bulkReport.action)}>إعادة محاولة الطلبات التي لم تكتمل فقط</button>}
+            <button className="underline" onClick={() => setBulkReport(null)}>إغلاق النتائج</button>
+          </div>}
+        {!bulkBusy && bulkReport.results.length < bulkReport.total && <p>توقف التنفيذ؛ بقيت الطلبات غير المنفذة محددة.</p>}
+        <ul className="max-h-64 overflow-y-auto text-sm space-y-2">{bulkReport.results.map(result => <li key={result.id} className={result.success ? 'text-green-700' : 'text-red-700'}>
+          {result.name} (…{result.id.slice(-6)}): {result.message}
+        </li>)}</ul>
+      </div>}
+
       {filter === 'labels' ? <OrderLabelsTab /> : <>
       {/* Table — desktop */}
       <div className="hidden lg:block bg-white rounded-xl border border-border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="border-b border-border bg-surface">
             <tr>
+              {bulkAction && <th className="px-4 py-3">تحديد</th>}
               {['#', 'الاسم', 'الهاتف', 'الولاية', 'المنتجات', 'الحالة', 'التاريخ', 'إجراءات'].map(h => (
                 <th key={h} className="text-right px-4 py-3 font-heading font-bold text-xs text-muted">
                   {h}
@@ -590,13 +679,14 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           <tbody className="divide-y divide-border">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-center py-12 text-muted font-body text-sm">
+                <td colSpan={bulkAction ? 9 : 8} className="text-center py-12 text-muted font-body text-sm">
                   لا توجد طلبات
                 </td>
               </tr>
             ) : paginated.map((order) => (
               <React.Fragment key={order.id}>
                 <tr className={cn('hover:bg-surface/50 transition-colors', order.deleted_at && 'opacity-70')}>
+                  {bulkAction && <td className="px-4 py-3">{selectionCheckbox(order)}</td>}
                   <td className="px-4 py-3 font-body text-xs text-muted tabular-nums">
                     #{order.id.slice(-6).toUpperCase()}
                   </td>
@@ -721,7 +811,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                 {/* Expanded items */}
                 {expandedId === order.id && (
                   <tr key={`${order.id}-expanded`}>
-                    <td colSpan={8} className="bg-surface/60 px-6 py-4">
+                    <td colSpan={bulkAction ? 9 : 8} className="bg-surface/60 px-6 py-4">
                       <div className="space-y-2">
                         {(order.order_items ?? []).map(item => (
                           <div key={item.id} className="flex items-center gap-3 bg-white rounded-xl px-4 py-3 border border-border">
@@ -811,6 +901,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           <p className="text-center py-12 text-muted font-body text-sm">لا توجد طلبات</p>
         ) : paginated.map(order => (
           <div key={order.id} className="bg-white rounded-xl border border-border p-4 space-y-3">
+            {bulkAction && <div>{selectionCheckbox(order)}</div>}
             <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="font-heading font-bold text-base text-brand">{order.customer_name}</p>
@@ -971,18 +1062,18 @@ export default function OrdersClient({ initialOrders, products }: Props) {
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page === 1}
+            onClick={() => setPage(Math.max(1, currentPage - 1))}
+            disabled={currentPage === 1}
             className="px-3 py-1.5 text-sm font-heading font-bold border border-border rounded-lg disabled:opacity-40 hover:border-brand transition-colors"
           >
             السابق
           </button>
           <span className="text-sm font-body text-muted tabular-nums">
-            {page} / {totalPages}
+            {currentPage} / {totalPages}
           </span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
+            onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+            disabled={currentPage === totalPages}
             className="px-3 py-1.5 text-sm font-heading font-bold border border-border rounded-lg disabled:opacity-40 hover:border-brand transition-colors"
           >
             التالي

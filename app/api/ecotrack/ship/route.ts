@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         already_shipped: true,
+        status: order.status,
         tracking: order.ecotrack_tracking,
       })
     }
