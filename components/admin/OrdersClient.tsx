@@ -6,12 +6,13 @@ import { cn } from '@/lib/utils'
 import Modal from '@/components/ui/Modal'
 import OrderEditForm from '@/components/admin/OrderEditForm'
 import OrderRestoreForm from '@/components/admin/OrderRestoreForm'
+import OrderLabelsTab from '@/components/admin/OrderLabelsTab'
 import type { RestoreIssue } from '@/lib/order-restoration'
 import type { Order, Product } from '@/lib/types'
 
 type OrderStatus = 'pending' | 'confirmed' | 'delivered' | 'cancelled'
 type DisplayOrderStatus = OrderStatus | 'shipping'
-type FilterType = 'all' | 'deleted' | DisplayOrderStatus
+type FilterType = 'all' | 'deleted' | 'labels' | DisplayOrderStatus
 
 const STATUS_CONFIG: Record<DisplayOrderStatus, { label: string; badge: string; select: string }> = {
   pending:   { label: 'قيد الانتظار', badge: 'bg-amber-100 text-amber-800',  select: 'قيد الانتظار' },
@@ -34,6 +35,7 @@ const FILTER_TABS: { key: FilterType; label: string }[] = [
   { key: 'delivered', label: 'مُسلَّمة' },
   { key: 'cancelled', label: 'ملغاة' },
   { key: 'deleted',   label: 'المحذوفة' },
+  { key: 'labels',    label: 'طباعة البوالص' },
 ]
 
 const PER_PAGE = 20
@@ -561,7 +563,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
             </button>
           ))}
         </div>
-        <div className="relative flex-1">
+        {filter !== 'labels' && <div className="relative flex-1">
           <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
           <input
             value={search}
@@ -569,9 +571,10 @@ export default function OrdersClient({ initialOrders, products }: Props) {
             placeholder="بحث بالاسم أو الهاتف..."
             className="w-full bg-white border border-border rounded-xl pr-9 pl-4 py-2.5 text-sm text-brand placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10"
           />
-        </div>
+        </div>}
       </div>
 
+      {filter === 'labels' ? <OrderLabelsTab /> : <>
       {/* Table — desktop */}
       <div className="hidden lg:block bg-white rounded-xl border border-border overflow-hidden">
         <table className="w-full text-sm">
@@ -986,6 +989,8 @@ export default function OrdersClient({ initialOrders, products }: Props) {
           </button>
         </div>
       )}
+
+      </>}
 
       <Modal isOpen={Boolean(restoreProblem)} onClose={() => setRestoreProblem(null)} size="wide">
         {restoreProblem && <OrderRestoreForm order={restoreProblem.order} initialIssues={restoreProblem.issues}

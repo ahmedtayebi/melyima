@@ -10,7 +10,7 @@ function load(file, mocks = {}, append = '') {
   const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8') + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
+  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, URL, Blob, Uint8Array, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
   return exports;
 }
 let slots = [], cursor = 0, effects = [], firstRender = true;
@@ -150,5 +150,33 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   assert.equal(restoreRequests[0].expected_updated_at, '2026-09-29T00:00:00Z');
   assert.equal(restoredOrder.status, 'confirmed');
   console.log('PASS: restore dialog requires explicit missing-option selection and preserves canonical server status');
+  slots = []; cursor = 0; effects = []; firstRender = true;
+  let labelBatch = [];
+  const labelOrders = Array.from({length: 51}, (_, i) => ({id: `label-${i}`, customer_name: `Customer ${i}`, wilaya_name: 'Alger', ecotrack_tracking: `TRACK-${i}`, created_at: '2026-09-30'}));
+  const Labels = load('components/admin/OrderLabelsTab.tsx', {react: hooks,
+    $fetch: async () => ({ok: true, json: async () => ({orders: labelOrders})}),
+    '@/lib/build-labels-pdf': {buildLabelsPdf: async batch => {
+      labelBatch = batch;
+      return {bytes: new Uint8Array([1,2,3]), included: batch.slice(0,50).map(o=>o.id),
+        failures: [{id:'label-50',name:'Customer 50',error:'فشل تجريبي'}],cancelled:false};
+    }},
+  }).default;
+  const labelTree = () => {cursor=0;const tree=Labels();firstRender=false;return tree;};
+  labelTree();const labelCleanups=effects.map(fn=>fn());await new Promise(resolve=>setImmediate(resolve));
+  const checkboxes = () => walk(labelTree()).filter(n=>n.type==='input' && n.props.type==='checkbox');
+  assert.equal(checkboxes().length,51,'first page displays 50 rows plus select-all');
+  checkboxes()[0].props.onChange({target:{checked:true}});
+  assert(checkboxes().every(n=>n.props.checked));
+  walk(labelTree()).find(n=>n.type==='input' && n.props['aria-label']==='بحث في البوالص').props.onChange({target:{value:'TRACK-50'}});
+  assert.equal(checkboxes().length,2);assert(checkboxes()[1].props.checked,'select-all includes the off-page order');
+  walk(labelTree()).find(n=>n.type==='button' && String(n.props.children).includes('تجهيز البوالص المحددة')).props.onClick();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(labelBatch.length,51,'search must not silently remove previously selected orders');
+  assert(walk(labelTree()).some(n=>n.type==='a' && n.props.download==='ecotrack-labels.pdf'));
+  assert(checkboxes()[1].props.checked,'failed order stays selected for retry');
+  const textOf = n => typeof n === 'string' || typeof n === 'number' ? String(n) : Array.isArray(n) ? n.map(textOf).join('') : n?.props ? textOf(n.props.children) : '';
+  assert(textOf(labelTree()).includes('اكتمل التجهيز جزئيًا'));
+  labelCleanups.forEach(fn=>fn?.());
+  console.log('PASS: label tab selects across pages, preserves selection during search, exposes PDF and identifies partial failures');
   console.log('PASS: product dirty stock/null/zero, save failures, delivered-only revenue/rankings and chart boundaries');
 })().catch(error => { console.error(error); process.exitCode = 1; });

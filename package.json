@@ -8,7 +8,7 @@
     "start": "next start",
     "migrate:cloudinary": "node scripts/migrate-supabase-images-to-cloudinary.mjs",
     "lint": "eslint",
-    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs && node scripts/tests/order-restoration.cjs",
+    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs && node scripts/tests/order-restoration.cjs && node scripts/tests/order-labels.cjs",
     "test:admin:db": "bash scripts/tests/run-admin-db-tests.sh"
   },
   "dependencies": {
@@ -17,6 +17,7 @@
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.7.0",
     "next": "^16.2.9",
+    "pdf-lib": "^1.17.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
