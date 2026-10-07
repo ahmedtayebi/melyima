@@ -348,7 +348,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
                       <option value="">اختاري المنتج</option>
                       {sortedProducts.map(entry => (
                         <option key={entry.id} value={entry.id}>
-                          {entry.name}{entry.is_visible ? '' : ' (مخفي)'}
+                          {entry.name} — {Number(entry.price).toLocaleString('ar-DZ')} دج{entry.is_visible ? '' : ' (مخفي)'}
                         </option>
                       ))}
                     </select>
@@ -396,10 +396,27 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
                   >
                     <Trash2 size={17} />
                   </button>
+                  <dl className="sm:col-span-5 grid grid-cols-2 gap-3 rounded-lg bg-surface px-4 py-3">
+                    <div>
+                      <dt className="text-xs text-muted font-body">سعر الوحدة</dt>
+                      <dd className="mt-1 font-heading font-bold text-brand tabular-nums">
+                        {product ? <><bdi>{Number(product.price).toLocaleString('ar-DZ')}</bdi> دج</> : '—'}
+                      </dd>
+                    </div>
+                    <div aria-live="polite">
+                      <dt className="text-xs text-muted font-body">المجموع حسب الكمية ({item.quantity})</dt>
+                      <dd className="mt-1 font-heading font-bold text-accent tabular-nums">
+                        {product ? <><bdi>{itemsPrice([item], products).toLocaleString('ar-DZ')}</bdi> دج</> : '—'}
+                      </dd>
+                    </div>
+                  </dl>
                 </div>
               )
             })}
           </div>
+          <p className="text-xs text-muted font-body">
+            هذه أسعار المنتجات قبل التوصيل وأي تعديل يدوي على إجمالي الطلبية.
+          </p>
         </section>
       )}
 
