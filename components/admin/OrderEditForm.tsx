@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Minus, Plus, Save, Trash2 } from 'lucide-react'
 import { DELIVERY_PRICES } from '@/lib/delivery-prices'
-import { isValidOrderTotal } from '@/lib/order-total'
+import { adjustOrderTotalForItems, isValidOrderTotal } from '@/lib/order-total'
 import { orderEditState, isOrderEditState, type OrderEditState } from '@/lib/order-edit-state'
 import type { Order, Product } from '@/lib/types'
 
@@ -54,6 +54,13 @@ function makeItem(product?: Product): EditableItem {
   }
 }
 
+function itemsPrice(items: EditableItem[], products: Product[]): number {
+  return items.reduce((cents, item) => {
+    const product = products.find(entry => entry.id === item.product_id)
+    return cents + Math.round((product?.price ?? 0) * 100) * item.quantity
+  }, 0) / 100
+}
+
 export default function OrderEditForm({ order, products, onCancel, onSaved }: Props) {
   const locked =
     order.status === 'delivered' ||
@@ -73,8 +80,11 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
   const [commune, setCommune] = useState(order.commune ?? '')
   const [address, setAddress] = useState(order.address ?? '')
   const [notes, setNotes] = useState(order.notes ?? '')
-  const [totalPrice, setTotalPrice] = useState(String(order.total_price))
   const [items, setItems] = useState<EditableItem[]>(() => initialItems(order))
+  const [priceInput, setPriceInput] = useState(() => ({
+    value: String(order.total_price),
+    productsTotal: itemsPrice(items, products),
+  }))
   const [communes, setCommunes] = useState<CommuneOption[]>([])
   const [communesLoading, setCommunesLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -114,10 +124,9 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
     ? (deliveryType === 'home' ? deliveryEntry.home : deliveryEntry.office)
     : 0
   const deliveryPrice = freeDelivery ? 0 : standardDeliveryPrice
-  const productsTotal = items.reduce((total, item) => {
-    const product = products.find(entry => entry.id === item.product_id)
-    return total + (product?.price ?? 0) * item.quantity
-  }, 0)
+  const productsTotal = itemsPrice(items, products)
+  const totalPrice = adjustOrderTotalForItems(priceInput.value, priceInput.productsTotal, productsTotal)
+  const setTotalPrice = (value: string) => setPriceInput({ value, productsTotal })
   const finalTotal = totalPrice.trim() === '' ? NaN : Number(totalPrice)
   const validTotal = isValidOrderTotal(finalTotal, deliveryPrice)
 
@@ -126,12 +135,9 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
     const nextPrice = nextFree ? 0 : (nextEntry?.[nextType] ?? 0)
 
     // Preserve the agreed product amount, including any manual discount.
-    setTotalPrice(current => {
-      const total = current.trim() === '' ? NaN : Number(current)
-      return isValidOrderTotal(total, deliveryPrice)
-        ? String(Math.round((total - deliveryPrice + nextPrice) * 100) / 100)
-        : current
-    })
+    if (validTotal) {
+      setTotalPrice(String((Math.round(finalTotal * 100) - Math.round(deliveryPrice * 100) + Math.round(nextPrice * 100)) / 100))
+    }
     if (nextWilaya !== wilaya || nextType !== deliveryType) setCommune('')
     setWilaya(nextWilaya)
     setDeliveryType(nextType)
@@ -444,7 +450,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
           </Field>
           <p id="order-total-help" className="text-xs text-muted font-body">
             هذا هو المبلغ النهائي المطلوب من الزبون لهذه الطلبية فقط، شاملًا التوصيل.
-            يبقى المبلغ المدخل ثابتًا عند تعديل المنتجات، ويمكن إعادة حسابه بالزر أدناه.
+            يتحدّث الإجمالي تلقائيًا عند إضافة منتج أو حذفه أو تغيير الكمية، مع الاحتفاظ بقيمة التخفيض أو الزيادة اليدوية.
           </p>
           <button
             type="button"

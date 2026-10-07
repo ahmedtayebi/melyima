@@ -19,15 +19,16 @@ const delivery = load('lib/delivery-prices.ts');
 const id = '11111111-1111-4111-8111-111111111111';
 const item = { product_id: id, color_id: id, size_id: id, quantity: 2 };
 const body = { expected_updated_at: '2026-09-28T12:00:00+00:00', customer_name: 'Customer', phone: '0555555555', wilaya: '16', delivery_type: 'home', commune: 'Alger', address: 'Address', notes: '', items: [item], total_price: 2400 };
-let order, calls, rpcError;
+let order, calls, rpcError, extraProducts;
 function reset(status = 'pending', ecotrack = 'none') {
   order = { ...body, updated_at: body.expected_updated_at, id, status, deleted_at: null, delivery_price: 850, ecotrack_status: ecotrack, ecotrack_tracking: ecotrack === 'none' ? null : 'TRACK', total_price: 2850, order_items: [{ ...item, product_name: 'Dress', color_name: 'Black', size_label: 'M' }] };
   calls = [];
   rpcError = null;
+  extraProducts = [];
 }
 const db = {
   from(table) {
-    const result = { data: table === 'orders' ? order : [{ id, name: 'Dress', price: 1000, product_colors: [{id, name: 'Black'}], product_sizes: [{id, label: 'M'}], product_variants: [{color_id: id, size_id: id, stock: 5}] }], error: null };
+    const result = { data: table === 'orders' ? order : [{ id, name: 'Dress', price: 1000, product_colors: [{id, name: 'Black'}], product_sizes: [{id, label: 'M'}], product_variants: [{color_id: id, size_id: id, stock: 5}] }, ...extraProducts], error: null };
     const query = { then(resolve) { return Promise.resolve(result).then(resolve); }, single: async () => result };
     for (const method of ['select', 'eq', 'in', 'is']) query[method] = () => query;
     query.update = value => { calls.push(['update', value]); return query; };
@@ -67,6 +68,16 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
   assert.equal(calls[0][0], 'ecotrack');
   assert.equal(calls[0][1].montant, 2400);
   assert.equal(calls[1][1].p_total_price, 2400);
+  for (const [status, shipping] of [['pending','none'],['confirmed','draft']]) {
+    reset(status, shipping);
+    const secondId = '22222222-2222-4222-8222-222222222222';
+    extraProducts = [{id:secondId,name:'Accessory',price:1200,product_colors:[{id:secondId,name:'Gold'}],product_sizes:[{id:secondId,label:'One size'}],product_variants:[]}];
+    const expanded = {...body,total_price:4050,items:[item,{product_id:secondId,color_id:secondId,size_id:secondId,quantity:1}]};
+    assert.equal((await put(expanded)).status,200);
+    const saved = calls.find(([name])=>name==='rpc')[1];
+    assert.equal(saved.p_total_price,4050);assert.equal(saved.p_items.length,2);
+    if (shipping==='draft') assert.equal(calls.find(([name])=>name==='ecotrack')[1].montant,4050);
+  }
   reset('confirmed', 'draft');
   rpcError = { message: 'insufficient_stock' };
   assert.equal((await put(body)).status, 409);

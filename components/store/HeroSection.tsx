@@ -255,7 +255,7 @@ export default function HeroSection() {
                   transition={{ duration: 0.9, delay: 0.2, ease: EASE }}
                 >
                   <Image
-                    src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/pogo.png"
+                    src="/pogo.png"
                     alt="عباءة نسائية عصرية من MELY•IMA"
                     width={700}
                     height={300}

@@ -65,7 +65,7 @@ export default function Header({ onCartClick }: HeaderProps) {
             className="flex items-center flex-shrink-0"
           >
             <Image
-              src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/logo.png"
+              src="/logo.png"
               alt="MELY•IMA"
               width={150}
               height={70}

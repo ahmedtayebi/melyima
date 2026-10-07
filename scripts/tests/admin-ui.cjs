@@ -126,6 +126,66 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   assert.equal(requests[1].total_price, 5400);
   assert.equal(saved, 1);
   console.log('PASS: order edit draft preserved through conflict and saved only after explicit review');
+  // Reproduce adding a second product while the editable total still contains
+  // the first product's saved amount. Exercise the actual form handlers/payload.
+  slots = []; cursor = 0; firstRender = true; effects = [];
+  const pricingRequests = [];
+  const pricingProducts = [
+    {id:'p',name:'Dress',price:5900,product_colors:[{id:'c',name:'Black'}],product_sizes:[{id:'s',label:'M'}]},
+    {id:'q',name:'Accessory',price:1200,product_colors:[{id:'cq',name:'Gold'}],product_sizes:[{id:'sq',label:'One size'}]},
+  ];
+  const PricingForm = load('components/admin/OrderEditForm.tsx', {
+    react: {...hooks, useMemo: fn => fn()},
+    '@/lib/delivery-prices': load('lib/delivery-prices.ts'),
+    '@/lib/order-total': load('lib/order-total.ts'),
+    '@/lib/order-edit-state': editState,
+    $fetch: async (_url, init) => {pricingRequests.push(JSON.parse(init.body));return {ok:true,json:async()=>({success:true})};},
+  }).default;
+  let pricingOrder = {...editOrder,delivery_price:850,total_price:6750};
+  const pricingTree = () => {cursor=0;const tree=PricingForm({order:pricingOrder,products:pricingProducts,onCancel(){},onSaved(){}});firstRender=false;return tree;};
+  const totalInput = () => walk(pricingTree()).find(n=>n.type==='input' && n.props['aria-describedby']==='order-total-help');
+  const addProduct = () => walk(pricingTree()).find(n=>n.type==='button' && String(n.props.children).includes('إضافة منتج')).props.onClick();
+  const quantity = (label,index=0) => walk(pricingTree()).filter(n=>n.type==='button' && n.props['aria-label']===label)[index].props.onClick();
+  const setTotal = value => totalInput().props.onChange({target:{value}});
+  const toggleFree = checked => walk(pricingTree()).find(n=>n.type==='input' && n.props.type==='checkbox').props.onChange({target:{checked}});
+  const assertTotal = expected => assert.equal(Number(totalInput().props.value),expected);
+  const savePricing = () => pricingTree().props.onSubmit({preventDefault(){}});
+  assertTotal(6750);
+  addProduct();assertTotal(7950);
+  await savePricing();assert.equal(pricingRequests.at(-1).total_price,7950);assert.equal(pricingRequests.at(-1).items.length,2);
+  quantity('زيادة الكمية',1);assertTotal(9150);
+  quantity('إنقاص الكمية',1);assertTotal(7950);
+  quantity('حذف المنتج',1);assertTotal(6750);
+  setTotal('6200');addProduct();assertTotal(7400); // Keep the 550 DZD discount, not the entire old total.
+  toggleFree(true);assertTotal(6550);
+  quantity('زيادة الكمية',1);assertTotal(7750);
+  await savePricing();assert.equal(pricingRequests.at(-1).total_price,7750);assert.equal(pricingRequests.at(-1).free_delivery,true);
+  quantity('حذف المنتج',1);assertTotal(5350);
+  toggleFree(false);assertTotal(6200);
+  walk(pricingTree()).find(n=>n.type==='select' && n.props.value==='p').props.onChange({target:{value:'q'}});
+  assertTotal(1500); // Replacing a product applies the price difference and resets quantity.
+  walk(pricingTree()).find(n=>n.type==='button' && String(n.props.children).includes('استخدام المبلغ المحسوب')).props.onClick();
+  assertTotal(2050);
+  quantity('زيادة الكمية');assertTotal(3250);
+  setTotal('');quantity('زيادة الكمية');
+  assert.equal(totalInput().props.value,'','blank totals remain invalid until entered');
+  const beforeInvalid = pricingRequests.length;await savePricing();assert.equal(pricingRequests.length,beforeInvalid);
+  setTotal('5000');quantity('إنقاص الكمية');assertTotal(3800);
+  // Merely reopening/saving an already discounted order must preserve its total.
+  slots = []; cursor = 0; firstRender = true; effects = [];
+  pricingOrder={...editOrder,delivery_price:0,total_price:5400};
+  assertTotal(5400);await savePricing();assert.equal(pricingRequests.at(-1).total_price,5400);
+  addProduct();assertTotal(6600);
+  quantity('حذف المنتج',1);assertTotal(5400);
+  // Currency arithmetic and a negative result after removing deeply discounted
+  // items must not silently save a free/invalid order.
+  slots = []; cursor = 0; firstRender = true; effects = [];
+  pricingProducts[0].price=10.1;pricingProducts[1].price=20.2;
+  pricingOrder={...editOrder,delivery_price:0,total_price:10.1};
+  addProduct();assertTotal(30.3);quantity('زيادة الكمية',1);assertTotal(50.5);
+  setTotal('1');quantity('حذف المنتج',1);assertTotal(-39.4);
+  const beforeNegative=pricingRequests.length;await savePricing();assert.equal(pricingRequests.length,beforeNegative);
+  console.log('PASS: editable order total follows added/removed/replaced products and quantities, preserves discounts, delivery and saved payloads');
   slots = []; cursor = 0; firstRender = true; effects = [];
   let restoredOrder = null; const restoreRequests = [];
   const RestoreForm = load('components/admin/OrderRestoreForm.tsx', {

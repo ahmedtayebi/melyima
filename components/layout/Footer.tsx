@@ -96,7 +96,7 @@ export default function Footer() {
           <div className="flex flex-col gap-5">
             <div className="flex justify-right w-full">
               <Image
-                src="https://res.cloudinary.com/i8cdktit/image/fetch/f_auto,q_auto/https://www.melyima.com/logo.png"
+                src="/logo.png"
                 alt=""
                 width={500}
                 height={200}

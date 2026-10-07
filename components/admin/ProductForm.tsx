@@ -48,7 +48,7 @@ const SIZE_PRESETS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const CLIENT_MAX_IMAGE_SIZE = 20 * 1024 * 1024
-const TARGET_UPLOAD_IMAGE_SIZE = 4 * 1024 * 1024
+const TARGET_UPLOAD_IMAGE_SIZE = 700 * 1024
 const MAX_UPLOAD_IMAGE_SIDE = 1600
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58]
 
@@ -171,7 +171,7 @@ async function uploadProductImage(file: File, productId: string, colorId: string
   formData.set('product_id', productId)
   formData.set('color_id', colorId)
 
-  const res = await fetch('/api/admin/cloudinary/upload', {
+  const res = await fetch('/api/admin/images/upload', {
     method: 'POST',
     body: formData,
   })
