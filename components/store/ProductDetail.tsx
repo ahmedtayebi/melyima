@@ -1,5 +1,7 @@
 'use client'
 
+import { ProductImg } from '@/components/ui/ProductImage'
+
 import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import { ChevronRight, ChevronLeft, ShoppingBag, Check } from 'lucide-react'
@@ -117,7 +119,7 @@ export default function ProductDetail({
             <div className="lg:hidden">
               <div className="relative aspect-[3/4] overflow-hidden rounded-2xl bg-surface">
                 {colorImages.length > 0 ? (
-                  <img
+                  <ProductImg
                     src={colorImages[currentImageIndex]}
                     alt={product.name}
                     className="w-full h-full object-cover transition-opacity duration-300"
@@ -188,7 +190,7 @@ export default function ProductDetail({
                       className="aspect-square rounded-xl overflow-hidden border-2 transition-all duration-200"
                       style={{ borderColor: i === currentImageIndex ? '#1a1a1a' : 'transparent' }}
                     >
-                      <img src={img} alt="" className="w-full h-full object-cover" />
+                      <ProductImg src={img} alt="" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -196,7 +198,7 @@ export default function ProductDetail({
 
               <div className="flex-1 relative aspect-[3/4] overflow-hidden rounded-2xl bg-surface">
                 {colorImages.length > 0 ? (
-                  <img
+                  <ProductImg
                     src={colorImages[currentImageIndex]}
                     alt={product.name}
                     className="w-full h-full object-cover transition-opacity duration-300"

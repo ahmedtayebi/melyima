@@ -1,5 +1,7 @@
 'use client'
 
+import { ProductImg } from '@/components/ui/ProductImage'
+
 import { useState } from 'react'
 import Link from 'next/link'
 import { Plus, Pencil, Trash2, Eye, EyeOff, X, Check } from 'lucide-react'
@@ -205,7 +207,7 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
               {/* Image */}
               <div className="aspect-[4/3] relative overflow-hidden bg-surface">
                 {getFirstImage(product) ? (
-                  <img
+                  <ProductImg
                     src={getFirstImage(product)!}
                     alt={product.name}
                     className="w-full h-full object-cover"

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { requireAdmin } from '@/app/api/ecotrack/_auth'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { uploadCloudinaryProductImage } from '@/lib/cloudinary-product-upload.mjs'
 import { PRODUCT_IMAGE_BUCKET, MAX_PRODUCT_IMAGE_BYTES, imageFormat, ensureProductImageBucket } from '@/lib/product-image-storage.mjs'
 
 export const runtime = 'nodejs'
@@ -33,7 +34,17 @@ export async function POST(req: Request) {
     })
     if (error) throw new Error('تعذّر رفع الصورة إلى Supabase.')
     const { data } = db.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(path)
-    return NextResponse.json({ success: true, url: data.publicUrl }, { headers: { 'Cache-Control': 'no-store' } })
+    const backupUrl = data.publicUrl
+    try {
+      const url = await uploadCloudinaryProductImage(bytes, format.mime, backupUrl)
+      return NextResponse.json({ success: true, url, backup_url: backupUrl, mirrored: true }, { headers: { 'Cache-Control': 'no-store' } })
+    } catch {
+      // A CDN outage must not discard the durable copy or prevent catalog saves.
+      return NextResponse.json({
+        success: true, url: backupUrl, backup_url: backupUrl, mirrored: false,
+        warning: 'حُفظت الصورة في Supabase، لكن تعذّر إرسال نسختها إلى Cloudinary. ستظهر من Supabase مباشرة.',
+      }, { headers: { 'Cache-Control': 'no-store' } })
+    }
   } catch {
     return NextResponse.json({ success: false, error: 'تعذّر رفع الصورة إلى Supabase. تحققي من إعدادات التخزين وحاولي مجددًا.' }, { status: 500 })
   }

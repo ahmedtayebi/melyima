@@ -40,6 +40,7 @@ const base={customer_name:'Customer',phone:'0555555555',phone2:null,status:'pend
  const component=load('components/admin/OrdersClient.tsx',{
   react:{...hooks,default:{Fragment:Symbol.for('react.fragment')}},
   '@/lib/utils':{cn:()=>''},'@/components/ui/Modal':{default:()=>null},
+  '@/components/ui/ProductImage':{ProductImg:()=>null},
   '@/components/admin/OrderEditForm':{default:()=>null},'@/components/admin/OrderRestoreForm':{default:()=>null},'@/components/admin/OrderLabelsTab':{default:()=>null},
   '@/lib/bulk-orders':{...helper,runOrderBatch:async(batch,action,onResult)=>{submitted.push({batch,action});for(const o of batch)onResult({id:o.id,name:o.customer_name,success:o.id!=='p2',message:'result',patch:o.id==='p2'?{}:{status:'confirmed',ecotrack_status:'draft',ecotrack_tracking:'TRACK'}});}},
  }).default;

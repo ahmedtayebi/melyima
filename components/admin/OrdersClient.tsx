@@ -1,5 +1,7 @@
 'use client'
 
+import { ProductImg } from '@/components/ui/ProductImage'
+
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, ChevronDown, ChevronUp, Truck, Send, Trash2, ExternalLink, Loader2, Pencil, AlertTriangle, RotateCcw, ArchiveRestore } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -818,7 +820,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                             {/* Image */}
                             <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">
                               {item.color_image_url
-                                ? <img src={item.color_image_url} alt={item.product_name} className="w-full h-full object-cover" />
+                                ? <ProductImg src={item.color_image_url} alt={item.product_name} className="w-full h-full object-cover" />
                                 : <div className="w-full h-full" style={{ backgroundColor: item.color_hex }} />}
                             </div>
                             {/* Name */}
@@ -1009,7 +1011,7 @@ export default function OrdersClient({ initialOrders, products }: Props) {
                   <div key={item.id} className="flex items-center gap-2 bg-surface rounded-xl px-3 py-2">
                     <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
                       {item.color_image_url
-                        ? <img src={item.color_image_url} alt="" className="w-full h-full object-cover" />
+                        ? <ProductImg src={item.color_image_url} alt="" className="w-full h-full object-cover" />
                         : <div className="w-full h-full" style={{ backgroundColor: item.color_hex }} />}
                     </div>
                     <span className="font-heading font-bold text-xs text-brand flex-1 truncate">{item.product_name}</span>

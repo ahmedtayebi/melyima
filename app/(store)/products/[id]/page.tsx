@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { createStaticClient } from '@/lib/supabase/static'
 import { notFound } from 'next/navigation'
 import ProductDetail from '@/components/store/ProductDetail'
+import { productImageBackupUrl } from '@/lib/product-image-sources.mjs'
 import type { Product, ProductVariant } from '@/lib/types'
 
 const BASE_URL = 'https://melyima.com'
@@ -63,7 +64,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       description,
       url: `${BASE_URL}/products/${id}`,
       ...(firstImage && {
-        images: [{ url: firstImage, width: 800, height: 800, alt: title }],
+        // Social crawlers cannot run the browser's image-error fallback.
+        images: [{ url: productImageBackupUrl(firstImage) ?? firstImage, width: 800, height: 800, alt: title }],
       }),
     },
   }
@@ -131,7 +133,7 @@ export default async function ProductPage({ params }: Props) {
     '@type': 'Product',
     name: product.name,
     ...(product.description && { description: product.description }),
-    ...(firstImage && { image: firstImage }),
+    ...(firstImage && { image: productImageBackupUrl(firstImage) ?? firstImage }),
     brand: { '@type': 'Brand', name: 'MELY•IMA' },
     offers: {
       '@type': 'Offer',

@@ -46,7 +46,7 @@ export async function replaceReference(db, row, from, to) {
   if (current.data?.[row.field] === to) return 'already_updated'
   throw new Error(`Reference changed or deleted: ${row.table}/${row.id}`)
 }
-export async function collectReferences(db) {
+export async function collectReferences(db, include = isCloudinary) {
   const rows = []
   for (const [table, field] of Object.entries(columns)) {
     let cursor
@@ -55,7 +55,7 @@ export async function collectReferences(db) {
       if (cursor) query = query.gt('id', cursor)
       const { data, error } = await query
       if (error) throw new Error(`Cannot inventory ${table}`)
-      for (const row of data ?? []) if (isCloudinary(row[field])) rows.push({ table, field, id: row.id, oldUrl: row[field] })
+      for (const row of data ?? []) if (include(row[field])) rows.push({ table, field, id: row.id, oldUrl: row[field] })
       if (!data?.length || data.length < 500) break
       cursor = data.at(-1).id
     }

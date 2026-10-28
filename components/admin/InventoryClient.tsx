@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
+import Image from '@/components/ui/ProductImage'
 import { AlertTriangle, CheckCircle2, Loader2, Pencil, Search } from 'lucide-react'
 import { saveCatalog } from '@/lib/admin-catalog-client'
 import { cn } from '@/lib/utils'

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
+import Image from '@/components/ui/ProductImage'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2 } from 'lucide-react'
 import { useCartStore } from '@/lib/cart-store'

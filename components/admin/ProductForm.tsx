@@ -6,6 +6,7 @@ import { Plus, Trash2, GripVertical, Eye, EyeOff, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { saveCatalog } from '@/lib/admin-catalog-client'
 import Button from '@/components/ui/Button'
+import { ProductImg } from '@/components/ui/ProductImage'
 import { cn } from '@/lib/utils'
 import type { Product, ProductVariant } from '@/lib/types'
 
@@ -175,7 +176,7 @@ async function uploadProductImage(file: File, productId: string, colorId: string
     method: 'POST',
     body: formData,
   })
-  let result: { success?: boolean; url?: string; error?: string }
+  let result: { success?: boolean; url?: string; error?: string; warning?: string }
   try {
     result = await res.json()
   } catch {
@@ -186,7 +187,7 @@ async function uploadProductImage(file: File, productId: string, colorId: string
     throw new Error(result.error || 'تعذّر رفع الصورة')
   }
 
-  return result.url as string
+  return { url: result.url, warning: typeof result.warning === 'string' ? result.warning : undefined }
 }
 
 function buildInitialColors(product?: Product): ColorEntry[] {
@@ -263,7 +264,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
   const [variantStocks, setVariantStocks] = useState<Record<string, string>>({})
   const initialStocks = useRef<Record<string, string>>({})
   const [variantsLoaded, setVariantsLoaded] = useState(false)
-  const uploadedImages = useRef(new Map<File, string>())
+  const uploadedImages = useRef(new Map<File, Awaited<ReturnType<typeof uploadProductImage>>>())
   const savingRef = useRef(false)
 
   // Drag state for size reorder
@@ -479,13 +480,16 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       // Finish uploads before starting the single database transaction. Reuse
       // successful uploads if a later upload/save fails and the admin retries.
       const savedColors = []
+      const uploadWarnings = new Set<string>()
       for (const color of normalizeColorSort(activeColors)) {
         const images = []
         for (const img of color.images.filter(image => !image.toDelete)) {
           let url = img.preview
           if (!img.existing && img.file) {
-            url = uploadedImages.current.get(img.file) ?? await uploadProductImage(img.file, productId, color.id)
-            uploadedImages.current.set(img.file, url)
+            const uploaded = uploadedImages.current.get(img.file) ?? await uploadProductImage(img.file, productId, color.id)
+            uploadedImages.current.set(img.file, uploaded)
+            url = uploaded.url
+            if (uploaded.warning) uploadWarnings.add(uploaded.warning)
           }
           images.push({ image_url: url, sort_order: img.sort_order })
         }
@@ -510,6 +514,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
         expected_updated_at: initialData?.updated_at ?? null,
       })
 
+      if (uploadWarnings.size) window.alert([...uploadWarnings].join('\n'))
       router.push('/admin/products')
       router.refresh()
     } catch (err: unknown) {
@@ -1013,7 +1018,7 @@ function ImageSlot({ img, idx, onRemove, onDragStart, onDragOver }: ImageSlotPro
       onDragOver={onDragOver}
       className="relative w-20 h-20 rounded-xl overflow-hidden border border-border cursor-grab active:cursor-grabbing flex-shrink-0"
     >
-      <img src={img.preview} alt="" className="w-full h-full object-cover" />
+      <ProductImg src={img.preview} alt="" className="w-full h-full object-cover" />
       <button
         type="button"
         onClick={e => { e.stopPropagation(); onRemove() }}

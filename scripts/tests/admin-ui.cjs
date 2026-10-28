@@ -27,6 +27,7 @@ const mocks = {
   react: hooks,
   'next/navigation': { useRouter: () => ({ push: p => navigations.push(p), refresh() {} }) },
   '@/components/ui/Button': { default: function Button() {} },
+  '@/components/ui/ProductImage': { ProductImg: function ProductImg() {} },
   '@/lib/utils': { cn: (...values) => values.join(' ') },
   '@/lib/admin-catalog-client': { saveCatalog: async (action, payload) => {
     payloads.push({ action, payload }); if (fail) throw new Error('simulated rejection'); return null;

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLockScroll } from '@/lib/use-lock-scroll'
-import Image from 'next/image'
+import Image from '@/components/ui/ProductImage'
 import { X, ShoppingBag, Minus, Plus, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useCartStore } from '@/lib/cart-store'
