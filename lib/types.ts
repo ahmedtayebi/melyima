@@ -7,6 +7,7 @@ export interface Category {
 }
 
 export interface Product {
+  archived_at?: string | null
   id: string
   name: string
   price: number
@@ -30,6 +31,7 @@ export interface ProductColorImage {
 }
 
 export interface ProductColor {
+  archived_at?: string | null
   id: string
   product_id: string
   name: string
@@ -41,6 +43,7 @@ export interface ProductColor {
 }
 
 export interface ProductSize {
+  archived_at?: string | null
   id: string
   product_id: string
   label: string

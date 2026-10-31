@@ -2,9 +2,10 @@
 
 import { ProductImg } from '@/components/ui/ProductImage'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
-import { Plus, Pencil, Trash2, Eye, EyeOff, X, Check } from 'lucide-react'
+import { Plus, Pencil, Trash2, Eye, EyeOff, X, Check, Archive, RotateCcw } from 'lucide-react'
+import Modal from '@/components/ui/Modal'
 import { saveCatalog } from '@/lib/admin-catalog-client'
 import type { Product, Category } from '@/lib/types'
 
@@ -20,13 +21,18 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
   const [newCategoryName, setNewCategoryName] = useState('')
   const [addingCategory, setAddingCategory] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const mutationPending = useRef(false)
+  const [notice, setNotice] = useState('')
 
   const [error, setError] = useState('')
 
   // Filter products by category
+  const activeProducts = products.filter(product => !product.archived_at)
+  const archivedProducts = products.filter(product => product.archived_at)
   const filtered = activeCategory === 'all'
-    ? products
-    : products.filter(p => p.category_id === activeCategory)
+    ? activeProducts
+    : activeProducts.filter(p => p.category_id === activeCategory)
 
   const mutate = async (action: () => Promise<void>) => {
     setError('')
@@ -50,23 +56,36 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
   })
 
   const toggleVisibility = (id: string, current: boolean) => mutate(async () => {
-    await saveCatalog('product_visibility', { id, visible: !current })
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, is_visible: !current } : p))
+    if (mutationPending.current) return
+    mutationPending.current = true
+    setDeletingId(id)
+    try {
+      const result = await saveCatalog<Partial<Product>>('product_visibility', { id, visible: !current })
+      setProducts(prev => prev.map(p => p.id === id ? { ...p, ...result } : p))
+    } finally { mutationPending.current = false; setDeletingId(null) }
   })
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا المنتج؟')) return
-    setDeletingId(id)
+  const handleArchiveProduct = async (product: Product, restore = false) => {
+    if (mutationPending.current) return
+    if (!restore && !confirm('نقل المنتج إلى الأرشيف؟ سيختفي من المتجر ويمكن استرجاعه لاحقًا.')) return
+    mutationPending.current = true
+    setDeletingId(product.id)
+    setNotice('')
     await mutate(async () => {
-      await saveCatalog('product_delete', { id })
-      setProducts(prev => prev.filter(p => p.id !== id))
+      const result = await saveCatalog<Partial<Product>>(restore ? 'product_restore' : 'product_delete', {
+        id: product.id, expected_updated_at: product.updated_at,
+      })
+      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, ...result } : p))
+      setNotice(restore ? 'تم استرجاع المنتج وهو مخفي. يمكنك إظهاره من قائمة المنتجات.' : 'تم نقل المنتج إلى الأرشيف.')
     })
+    mutationPending.current = false
     setDeletingId(null)
   }
 
   const getFirstImage = (product: Product) => {
     const colors = product.product_colors
       ?.slice()
+      .filter(color => !color.archived_at)
       .sort((a, b) => a.sort_order - b.sort_order) ?? []
     const first = colors.find(c => c.image_url)
     return first?.image_url ?? null
@@ -76,15 +95,25 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
 
   return (
     <div className="space-y-6">
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {!archiveOpen && error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {!archiveOpen && notice && <p role="status" className="text-sm text-green-700">{notice}</p>}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h1 className="font-heading font-black text-2xl text-brand">المنتجات</h1>
           <span className="bg-brand text-white text-xs font-bold font-heading px-2.5 py-1 rounded-full">
-            {products.length}
+            {activeProducts.length}
           </span>
+          <button
+            type="button"
+            onClick={() => { setError(''); setNotice(''); setArchiveOpen(true) }}
+            aria-label="أرشيف المنتجات"
+            title="أرشيف المنتجات"
+            className="p-2 rounded-lg text-muted/70 hover:text-brand hover:bg-white transition-colors focus-visible:outline-2 focus-visible:outline-brand"
+          >
+            <Archive size={17} />
+          </button>
         </div>
         <Link
           href="/admin/products/new"
@@ -108,12 +137,12 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
           }}
           className="flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-heading font-bold transition-all"
         >
-          الكل ({products.length})
+          الكل ({activeProducts.length})
         </button>
 
         {/* Category tabs */}
         {categories.map((cat) => {
-          const count = products.filter(p => p.category_id === cat.id).length
+          const count = activeProducts.filter(p => p.category_id === cat.id).length
           const isActive = activeCategory === cat.id
           return (
             <div key={cat.id} className="flex-shrink-0 flex items-center gap-1">
@@ -192,7 +221,9 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((product) => {
-            const hasOutOfStockVariant = product.product_variants?.some(variant => variant.stock === 0) ?? false
+            const hasOutOfStockVariant = product.product_variants?.some(variant => variant.stock === 0
+              && product.product_colors?.some(color => color.id === variant.color_id && !color.archived_at)
+              && product.product_sizes?.some(size => size.id === variant.size_id && !size.archived_at)) ?? false
             const hasDiscount = product.original_price > 0 && product.original_price > product.price
             const discountAmount = hasDiscount ? product.original_price - product.price : 0
             const discountPercent = hasDiscount
@@ -244,8 +275,8 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                   {product.name}
                 </p>
                 <p className="text-xs text-muted font-body text-right mb-3">
-                  {product.product_colors?.length ?? 0} لون ·{' '}
-                  {product.product_sizes?.length ?? 0} مقاس
+                  {product.product_colors?.filter(color => !color.archived_at).length ?? 0} لون ·{' '}
+                  {product.product_sizes?.filter(size => !size.archived_at).length ?? 0} مقاس
                 </p>
                 <div className="mb-3 rounded-xl bg-surface/70 border border-border px-3 py-2 text-right">
                   <div className="flex items-center justify-between gap-2">
@@ -276,8 +307,10 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                 <div className="flex items-center justify-between">
                   <div className="flex gap-1">
                     <button
-                      onClick={() => handleDeleteProduct(product.id)}
-                      disabled={deletingId === product.id}
+                      onClick={() => handleArchiveProduct(product)}
+                      disabled={deletingId !== null}
+                      aria-label={`نقل ${product.name} إلى الأرشيف`}
+                      title="نقل إلى الأرشيف"
                       className="p-2 rounded-lg text-muted hover:text-red-500 hover:bg-red-50 transition-colors"
                     >
                       <Trash2 size={14} />
@@ -291,6 +324,7 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
                   </div>
                   <button
                     onClick={() => toggleVisibility(product.id, product.is_visible)}
+                    disabled={deletingId !== null}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-heading font-bold transition-all ${
                       product.is_visible
                         ? 'bg-green-50 text-green-700 hover:bg-green-100'
@@ -310,6 +344,29 @@ export default function ProductsClient({ initialProducts, initialCategories }: P
         </div>
       )}
 
+      <Modal isOpen={archiveOpen} onClose={() => setArchiveOpen(false)} title="أرشيف المنتجات">
+        <p className="text-sm text-muted mb-4">المنتجات هنا لا تظهر في المتجر. يمكنك استرجاعها مع صورها وخياراتها ومخزونها.</p>
+        {error && <p role="alert" className="text-sm text-red-600 mb-3">{error}</p>}
+        {notice && <p role="status" className="text-sm text-green-700 mb-3">{notice}</p>}
+        {archivedProducts.length === 0 ? <p className="text-sm text-muted py-6 text-center">الأرشيف فارغ</p> : (
+          <ul className="divide-y divide-border">
+            {archivedProducts.map(product => (
+              <li key={product.id} className="flex items-center gap-3 py-3">
+                {getFirstImage(product) && <ProductImg src={getFirstImage(product)!} alt="" className="w-12 h-14 object-cover rounded-lg shrink-0" />}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-heading font-bold text-brand break-words">{product.name}</p>
+                  <p className="text-xs text-muted">{formatPrice(product.price)}</p>
+                </div>
+                <button type="button" onClick={() => handleArchiveProduct(product, true)} disabled={deletingId !== null}
+                  aria-label={`استرجاع ${product.name}`}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-heading font-bold text-brand bg-surface disabled:opacity-50">
+                  <RotateCcw size={14} />{deletingId === product.id ? 'جارٍ الاسترجاع...' : 'استرجاع'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </div>
   )
 }

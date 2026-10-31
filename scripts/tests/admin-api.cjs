@@ -13,12 +13,14 @@ function load(file, mocks = {}) {
 }
 const id = '11111111-1111-4111-8111-111111111111';
 let authorized = true, invalidations = 0, dbError = null, writes = 0;
+const catalogRpcs = [], catalogDeletes = [];
 const auth = { requireAdmin: async () => authorized ? { userId: id } : NextResponse.json({}, { status: 401 }) };
 const db = {
-  rpc: async () => { writes++; return { data: { id }, error: dbError }; },
-  from() {
+  rpc: async (name, args) => { catalogRpcs.push({name,args}); writes++; return { data: { id }, error: dbError }; },
+  from(table) {
     const query = { then(resolve) { writes++; return Promise.resolve({ data: { id }, error: dbError }).then(resolve); } };
-    for (const key of ['update', 'upsert', 'insert', 'delete', 'eq', 'select', 'single']) query[key] = () => query;
+    for (const key of ['update', 'upsert', 'insert', 'eq', 'is', 'select', 'single']) query[key] = () => query;
+    query.delete = () => { catalogDeletes.push(table); return query; };
     return query;
   },
 };
@@ -37,12 +39,21 @@ const post = body => catalog.POST({ json: async () => body });
   };
   for (const action of [productSave, { action: 'stock_save', product_id: id, color_id: id, size_id: id, expected_stock: 4, stock: null },
     { action: 'settings_save', policy: 'Policy' }, { action: 'category_create', name: 'New', sort_order: 0 },
-    ...['category_delete', 'product_delete', 'review_delete'].map(action => ({ action, id })),
+    ...['category_delete', 'review_delete'].map(action => ({ action, id })),
+    ...['product_delete', 'product_restore'].map(action => ({ action, id, expected_updated_at: '2026-10-31T12:00:00Z' })),
     { action: 'product_visibility', id, visible: false }, { action: 'review_status', id, status: 'approved' }]) {
     const before = invalidations;
     assert.equal((await post(action)).status, 200);
     assert.equal(invalidations, before + 1, `${action.action} did not refresh store cache`);
   }
+  const archiveCalls = catalogRpcs.filter(call => call.name === 'set_catalog_product_archived');
+  assert.deepEqual(archiveCalls.map(call => call.args.p_archived), [true, false]);
+  assert(!catalogDeletes.includes('products'), 'delete action must never physically delete a product');
+  assert.equal((await post({action:'product_delete',id})).status,400,'archive needs a version');
+  dbError = {message:'product_archived'};
+  assert.equal((await post(productSave)).status,409);
+  dbError = {message:'missing RPC',code:'PGRST202'};
+  assert.equal((await post({action:'product_restore',id,expected_updated_at:'2026-10-31T12:00:00Z'})).status,503);
   dbError = { message: 'rejected' };
   const before = invalidations;
   assert.equal((await post({ action: 'settings_save', policy: 'Must fail' })).status, 500);
@@ -55,6 +66,7 @@ const post = body => catalog.POST({ json: async () => body });
   assert.equal(writes, beforeWrites);
   authorized = false;
   assert.equal((await post(productSave)).status, 401);
+  assert.equal((await post({action:'product_restore',id,expected_updated_at:'2026-10-31T12:00:00Z'})).status,401);
   assert.equal(writes, beforeWrites);
   authorized = true;
 

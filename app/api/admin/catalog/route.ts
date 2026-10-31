@@ -39,16 +39,22 @@ export async function POST(request: Request) {
         result = await db.from('categories').insert({ name: body.name.trim(), sort_order: body.sort_order }).select().single()
         break
       case 'category_delete':
-      case 'product_delete':
       case 'review_delete': {
         if (!isUuid(body.id)) return invalid()
-        const table = body.action === 'category_delete' ? 'categories' : body.action === 'product_delete' ? 'products' : 'reviews'
+        const table = body.action === 'category_delete' ? 'categories' : 'reviews'
         result = await db.from(table).delete().eq('id', body.id).select('id').single()
         break
       }
+      case 'product_delete':
+      case 'product_restore':
+        if (!isUuid(body.id) || typeof body.expected_updated_at !== 'string' || !Number.isFinite(Date.parse(body.expected_updated_at))) return invalid()
+        result = await db.rpc('set_catalog_product_archived', {
+          p_product_id: body.id, p_archived: body.action === 'product_delete', p_expected_updated_at: body.expected_updated_at,
+        })
+        break
       case 'product_visibility':
         if (!isUuid(body.id) || typeof body.visible !== 'boolean') return invalid()
-        result = await db.from('products').update({ is_visible: body.visible }).eq('id', body.id).select('id').single()
+        result = await db.from('products').update({ is_visible: body.visible }).eq('id', body.id).is('archived_at', null).select('id, updated_at, is_visible').single()
         break
       case 'review_status':
         if (!isUuid(body.id) || !['approved', 'rejected'].includes(String(body.status))) return invalid()
@@ -57,8 +63,11 @@ export async function POST(request: Request) {
       default: return invalid()
     }
     if (result.error) {
-      if (result.error.message.includes('order_option_in_use')) {
-        return NextResponse.json({ success: false, error: 'لا يمكن حذف منتج أو لون أو مقاس مرتبط بطلب، حتى لو كان الطلب في المحذوفات. استخدمي الإخفاء للحفاظ على بيانات الطلبات.' }, { status: 409 })
+      if (['product_archived', 'product_option_archived'].includes(result.error.message)) {
+        return NextResponse.json({ success: false, error: 'المنتج أو أحد خياراته مؤرشف. حدّثي الصفحة واسترجعيه من الأرشيف قبل تعديله.' }, { status: 409 })
+      }
+      if (result.error.message.includes('order_option_in_use') || result.error.message.includes('catalog_archive_required') || result.error.code === 'PGRST202') {
+        return NextResponse.json({ success: false, error: 'يلزم تحديث قاعدة البيانات والموقع لتفعيل أرشفة المنتجات واسترجاعها.' }, { status: 503 })
       }
       const conflict = ['stock_conflict', 'product_conflict', 'product_unavailable'].includes(result.error.message)
       console.error('Catalog save failed:', body.action, result.error)

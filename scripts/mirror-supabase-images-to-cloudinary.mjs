@@ -11,6 +11,35 @@ import { collectReferences, downloadImage, digest, replaceReference } from './mi
 
 const columns = { product_color_images: 'image_url', product_colors: 'image_url', order_items: 'color_image_url' }
 const rowKey = row => JSON.stringify([row.table, row.id, row.field, row.oldUrl])
+const networkCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND',
+  'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'])
+function networkCode(error) {
+  // Node fetch may wrap the actual cause in an AggregateError. Do not print URLs or credentials.
+  const pending = [error]
+  for (let i = 0; i < pending.length && i < 20; i++) {
+    const current = pending[i]
+    if (!current || typeof current !== 'object') continue
+    if (networkCodes.has(current.code)) return current.code
+    if (current.cause) pending.push(current.cause)
+    if (Array.isArray(current.errors)) pending.push(...current.errors.slice(0, 10))
+  }
+  return null
+}
+export async function withNetworkRetry(operation, stage, { log = console.log,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { return await operation() }
+    catch (error) {
+      const code = networkCode(error)
+      const transient = code || error.name === 'TimeoutError' || error.message === 'fetch failed' ||
+        /\bHTTP (408|429|5\d\d)\b/.test(error.message)
+      const detail = `${error.message}${code ? ` (${code})` : ''}`
+      if (!transient || attempt === 3) throw new Error(`${stage}: ${detail}; stopped after ${attempt} attempt(s)`, { cause: error })
+      log(`${stage}: ${detail}; retry ${attempt + 1}/3 in ${attempt}s.`)
+      await wait(attempt * 1000)
+    }
+  }
+}
 export function isMirrorSource(url, origin) {
   try { cloudinaryBackupPublicId(url, origin); return true } catch { return false }
 }
@@ -35,7 +64,7 @@ function validatePrimary(primary, source, origin, cloud) {
   }
 }
 export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journal, persist,
-  download = downloadImage, upload = uploadCloudinaryProductImage, replace = replaceReference, log = console.log }) {
+  download = downloadImage, upload = uploadCloudinaryProductImage, replace = replaceReference, log = console.log, wait }) {
   if (!['dry-run', 'apply', 'rollback'].includes(mode)) throw new Error('Invalid mode')
   if (!cloud || !/^[a-z0-9_-]+$/i.test(cloud)) throw new Error('CLOUDINARY_CLOUD_NAME is required')
   journal ??= { version: 1, origin, cloud, rows: [], assets: {} }
@@ -61,15 +90,19 @@ export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journa
   for (const [source, asset] of Object.entries(journal.assets)) {
     const rows = journal.rows.filter(row => row.oldUrl === source)
     if (!rows.length || (mode === 'rollback' && !asset.primary)) continue
+    const step = `Image ${completed + 1}/${Object.keys(journal.assets).length}`
+    const request = (operation, stage) => withNetworkRetry(operation, `${step} ${stage}`, { log, wait })
     // A stale journal or a changed Storage object must not redirect to a different photo.
-    const bytes = await download(source)
+    const bytes = await request(() => download(source), 'Supabase download')
     const hash = digest(bytes), format = imageFormat(bytes)
     if (!format || (asset.hash && asset.hash !== hash)) throw new Error('Supabase original changed or is invalid; stopped before changing this image')
     asset.hash = hash
     await persist(journal)
     if (mode === 'apply') {
       if (!asset.primary) {
-        const primary = await upload(bytes, format.mime, source)
+        // The uploader uses a deterministic public_id with overwrite=false, including retries
+        // where Cloudinary accepted the file but its response was lost.
+        const primary = await request(() => upload(bytes, format.mime, source), 'Cloudinary upload')
         validatePrimary(primary, source, origin, cloud)
         asset.primary = primary
         // Record the upload before updating references, so an interrupted run can resume.
@@ -77,7 +110,7 @@ export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journa
       }
       // Compare the ORIGINAL bytes, not an optimized derivative (which changes the hash).
       const original = asset.primary.replace('/image/upload/f_auto,q_auto:good,c_limit,w_1600/', '/image/upload/')
-      if (digest(await download(original)) !== hash) throw new Error('Cloudinary original verification failed; references for this image were not changed')
+      if (digest(await request(() => download(original), 'Cloudinary verification download')) !== hash) throw new Error('Cloudinary original verification failed; references for this image were not changed')
     }
     for (const row of rows) {
       try {
@@ -139,5 +172,11 @@ async function main() {
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().catch(error => { console.error(error.message); process.exitCode = 1 })
+  main().catch(error => {
+    console.error(error.message)
+    if (process.argv.includes('--apply') || process.argv.includes('--rollback')) {
+      console.error('Keep .local/image-mirror/state.json. After resolving the error, rerun the same command to resume safely.')
+    }
+    process.exitCode = 1
+  })
 }

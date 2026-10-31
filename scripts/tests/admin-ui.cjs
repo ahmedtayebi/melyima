@@ -10,7 +10,7 @@ function load(file, mocks = {}, append = '') {
   const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8') + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, URL, Blob, Uint8Array, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, setTimeout() {} });
+  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, URL, Blob, Uint8Array, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, confirm: () => true, setTimeout() {} });
   return exports;
 }
 let slots = [], cursor = 0, effects = [], firstRender = true;
@@ -62,7 +62,53 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   assert.equal(navigations.length, 0, 'failed atomic save must stay in the editor');
   assert(walk(render()).some(n => n.props?.children === 'simulated rejection'));
 
+  // Archived options remain out of the payload until explicitly restored; their IDs are reused.
+  slots = []; cursor = 0; effects = []; firstRender = true; fail = false;
+  const archivedData = {...initialData,
+    product_colors: [...initialData.product_colors,{id:'archived-color',name:'Red',hex_code:'#ff0000',sort_order:1,archived_at:'2026-10-31',is_visible:false,images:[]}],
+    product_sizes: [...initialData.product_sizes,{id:'archived-size',label:'XL',sort_order:2,archived_at:'2026-10-31',is_visible:false}],
+  };
+  const archivedForm = () => { cursor=0; const tree=Form({productId:'p',initialData:archivedData});firstRender=false;return tree; };
+  archivedForm();effects.forEach(fn=>fn());await new Promise(resolve=>setImmediate(resolve));
+  await save(archivedForm());
+  assert(!payloads.at(-1).payload.colors.some(color=>color.id==='archived-color'));
+  assert(!payloads.at(-1).payload.sizes.some(size=>size.id==='archived-size'));
+  walk(archivedForm()).find(n=>n.props?.['aria-label']==='استرجاع اللون Red').props.onClick();
+  walk(archivedForm()).find(n=>n.props?.['aria-label']==='استرجاع المقاس XL').props.onClick();
+  await save(archivedForm());
+  assert(payloads.at(-1).payload.colors.find(color=>color.id==='archived-color').restore);
+  assert(payloads.at(-1).payload.sizes.find(size=>size.id==='archived-size').restore);
+
+  slots=[];cursor=0;
+  let productRequestFails=false; const archiveRequests=[];
+  const Products=load('components/admin/ProductsClient.tsx', {...mocks,
+    '@/components/ui/Modal': {default:function Modal(){}},
+    '@/lib/admin-catalog-client': {saveCatalog:async(action,payload)=>{
+      archiveRequests.push({action,payload});if(productRequestFails)throw Error('archive rejected');
+      return {id:payload.id,archived_at:action==='product_delete'?'2026-10-31':null,is_visible:false,updated_at:'2026-10-31T13:00:00Z'};
+    }},
+  }).default;
+  const catalogProducts=[{id:'p',name:'Dress',price:1000,original_price:0,is_visible:true,updated_at:'2026-10-31T12:00:00Z'},
+    {id:'old',name:'Old dress',price:900,original_price:0,is_visible:false,updated_at:'2026-10-31T12:00:00Z',archived_at:'2026-10-30'}];
+  const productTree=()=>{cursor=0;return Products({initialProducts:catalogProducts,initialCategories:[]})};
+  assert(walk(productTree()).some(n=>n.props?.href==='/admin/products/p/edit'));
+  assert(!walk(productTree()).some(n=>n.props?.href==='/admin/products/old/edit'));
+  walk(productTree()).find(n=>n.props?.['aria-label']==='أرشيف المنتجات').props.onClick();
+  assert(walk(productTree()).find(n=>n.type?.name==='Modal').props.isOpen);
+  productRequestFails=true;
+  await walk(productTree()).find(n=>n.props?.['aria-label']==='نقل Dress إلى الأرشيف').props.onClick();
+  assert(walk(productTree()).some(n=>n.props?.href==='/admin/products/p/edit'),'failed archive removed product');
+  productRequestFails=false;
+  await walk(productTree()).find(n=>n.props?.['aria-label']==='نقل Dress إلى الأرشيف').props.onClick();
+  assert(!walk(productTree()).some(n=>n.props?.href==='/admin/products/p/edit'));
+  await walk(productTree()).find(n=>n.props?.['aria-label']==='استرجاع Dress').props.onClick();
+  assert(walk(productTree()).some(n=>n.props?.href==='/admin/products/p/edit'));
+  assert.equal(archiveRequests.at(-1).action,'product_restore');
+  assert.equal(archiveRequests.at(-1).payload.expected_updated_at,'2026-10-31T13:00:00Z');
+  console.log('PASS: small archive icon/modal, archive and restore with failure handling; explicit option restoration reuses original IDs');
+
   slots = []; cursor = 0;
+  fail = true;
   const Settings = load('components/admin/SettingsClient.tsx', mocks).default;
   const settings = () => { cursor = 0; return Settings({ initialSettings: { store_policy: 'Original' } }); };
   await walk(settings()).find(n => n.type === 'button').props.onClick();

@@ -42,8 +42,8 @@ function initialItems(order: Order): EditableItem[] {
 }
 
 function makeItem(product?: Product): EditableItem {
-  const colors = product?.product_colors ?? []
-  const sizes = product?.product_sizes ?? []
+  const colors = product?.product_colors?.filter(color => !color.archived_at) ?? []
+  const sizes = product?.product_sizes?.filter(size => !size.archived_at) ?? []
 
   return {
     key: crypto.randomUUID(),
@@ -159,7 +159,7 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
     })
   }
 
-  const addItem = () => setItems(current => [...current, makeItem(sortedProducts[0])])
+  const addItem = () => setItems(current => [...current, makeItem(sortedProducts.find(product => !product.archived_at))])
   const removeItem = (key: string) => {
     setItems(current => current.length === 1 ? current : current.filter(item => item.key !== key))
   }
@@ -338,17 +338,17 @@ export default function OrderEditForm({ order, products, onCancel, onSaved }: Pr
           <div className="grid gap-3">
             {items.map(item => {
               const product = products.find(entry => entry.id === item.product_id)
-              const colors = (product?.product_colors ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
-              const sizes = (product?.product_sizes ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
+              const colors = (product?.product_colors ?? []).filter(color => !color.archived_at || color.id === item.color_id).sort((a, b) => a.sort_order - b.sort_order)
+              const sizes = (product?.product_sizes ?? []).filter(size => !size.archived_at || size.id === item.size_id).sort((a, b) => a.sort_order - b.sort_order)
 
               return (
                 <div key={item.key} className="bg-white border border-border rounded-lg p-4 grid sm:grid-cols-[2fr_1fr_1fr_auto_auto] gap-3 items-end">
                   <Field label="المنتج">
                     <select value={item.product_id} onChange={event => selectProduct(item.key, event.target.value)}>
                       <option value="">اختاري المنتج</option>
-                      {sortedProducts.map(entry => (
+                      {sortedProducts.filter(entry => !entry.archived_at || entry.id === item.product_id).map(entry => (
                         <option key={entry.id} value={entry.id}>
-                          {entry.name} — {Number(entry.price).toLocaleString('ar-DZ')} دج{entry.is_visible ? '' : ' (مخفي)'}
+                          {entry.name} — {Number(entry.price).toLocaleString('ar-DZ')} دج{entry.archived_at ? ' (مؤرشف)' : entry.is_visible ? '' : ' (مخفي)'}
                         </option>
                       ))}
                     </select>

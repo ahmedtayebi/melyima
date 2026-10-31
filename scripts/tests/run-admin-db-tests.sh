@@ -58,3 +58,5 @@ end; $$;
 SQL
 wait "$restore_pid"
 echo 'PASS: simultaneous restore retries reserve stock only once'
+
+psql -h "$test_dir" -p 55439 -d postgres -X -q -f scripts/tests/catalog-archive.sql

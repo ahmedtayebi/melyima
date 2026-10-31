@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mirrorImages, validateJournal, isMirrorSource } from '../mirror-supabase-images-to-cloudinary.mjs'
+import { mirrorImages, validateJournal, isMirrorSource, withNetworkRetry } from '../mirror-supabase-images-to-cloudinary.mjs'
 import { cloudinaryBackupPublicId } from '../../lib/product-image-sources.mjs'
 
 const origin = 'https://test.supabase.co', cloud = 'test-cloud'
@@ -102,4 +102,36 @@ await assert.rejects(() => mirrorImages({ ...changed.options, mode: 'apply', jou
   download: async () => Buffer.from([255,216,255,99]),
 }), /original changed/)
 assert.equal(changed.state().uploads, 0); assert.equal(changed.state().writes, 0)
+// Transient failures are retried, permanent rejections are not. Include nested fetch causes.
+for (const error of [new TypeError('fetch failed', { cause: new AggregateError([{ code: 'ETIMEDOUT' }]) }),
+  Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }),
+  new Error('Download HTTP 503'), new Error('Cloudinary upload HTTP 429')]) {
+  let attempts = 0; const pauses = [], messages = []
+  const answer = await withNetworkRetry(async () => { if (++attempts < 3) throw error; return 'ok' }, 'Cloudinary verification download', {
+    wait: async ms => pauses.push(ms), log: text => messages.push(text),
+  })
+  assert.equal(answer, 'ok'); assert.equal(attempts, 3); assert.deepEqual(pauses, [1000, 2000])
+  if (error.cause) assert.match(messages[0], /ETIMEDOUT/)
+}
+for (const message of ['Cloudinary upload HTTP 401', 'Download HTTP 403', 'Download HTTP 404', 'Unexpected Cloudinary upload response']) {
+  let attempts = 0
+  await assert.rejects(() => withNetworkRetry(async () => { attempts++; throw new Error(message) }, 'Cloudinary upload', {
+    wait: async () => assert.fail('permanent error must not retry'),
+  }), /Cloudinary upload: .*stopped after 1 attempt/)
+  assert.equal(attempts, 1)
+}
+// Reproduce a successful upload followed by a disconnected verification request.
+const interrupted = fixture(); let verificationAttempts = 0
+await assert.rejects(() => mirrorImages({ ...interrupted.options, mode: 'apply', wait: async () => {},
+  download: async url => {
+    if (url === original) { verificationAttempts++; throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }) }
+    return jpeg
+  },
+}), /Image 1\/1 Cloudinary verification download: fetch failed \(ECONNRESET\); stopped after 3/)
+assert.equal(verificationAttempts, 3)
+assert.equal(interrupted.state().uploads, 1); assert.equal(interrupted.state().writes, 0)
+assert.equal(interrupted.state().saved.assets[source].primary, primary)
+await mirrorImages({ ...interrupted.options, mode: 'apply', journal: interrupted.state().saved })
+assert.equal(interrupted.state().uploads, 1); assert.equal(interrupted.state().writes, 3)
+console.log('PASS: bounded network retries, permanent HTTP failures, stage/cause diagnostics and resume after verification disconnect without reupload')
 console.log('PASS: read-only mirror inventory, source restrictions, unique copy for gallery/cover/orders, hash verification, interrupted retry, concurrent edits, rollback and project guards')

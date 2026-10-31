@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Trash2, GripVertical, Eye, EyeOff, X } from 'lucide-react'
+import { Plus, Trash2, GripVertical, Eye, EyeOff, X, Archive, RotateCcw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { saveCatalog } from '@/lib/admin-catalog-client'
 import Button from '@/components/ui/Button'
@@ -22,6 +22,7 @@ interface ImageEntry {
 }
 
 interface ColorEntry {
+  archived?: boolean
   id: string
   isNew: boolean
   name: string
@@ -34,6 +35,7 @@ interface ColorEntry {
 }
 
 interface SizeEntry {
+  archived?: boolean
   id: string
   isNew: boolean
   label: string
@@ -196,6 +198,8 @@ function buildInitialColors(product?: Product): ColorEntry[] {
     .sort((a, b) => a.sort_order - b.sort_order)
     .map(c => ({
     id: c.id,
+    archived: Boolean(c.archived_at),
+    toDelete: Boolean(c.archived_at),
     isNew: false,
     name: c.name,
     hex_code: c.hex_code,
@@ -217,6 +221,8 @@ function buildInitialSizes(product?: Product): SizeEntry[] {
     .sort((a, b) => a.sort_order - b.sort_order)
     .map(s => ({
       id: s.id,
+      archived: Boolean(s.archived_at),
+      toDelete: Boolean(s.archived_at),
       isNew: false,
       label: s.label,
       is_visible: s.is_visible,
@@ -388,6 +394,11 @@ export default function ProductForm({ productId, initialData, categories = [] }:
     const trimmed = label.trim()
     if (!trimmed) return
     if (sizes.some(s => !s.toDelete && s.label === trimmed)) return
+    const archived = sizes.find(s => s.toDelete && s.label === trimmed)
+    if (archived) {
+      setSizes(prev => prev.map(s => s.id === archived.id ? { ...s, toDelete: false, is_visible: true } : s))
+      return
+    }
     setSizes(prev => [...prev, {
       id: tempId(),
       isNew: true,
@@ -471,7 +482,7 @@ export default function ProductForm({ productId, initialData, categories = [] }:
     const savedOriginalPrice = discountPriceNum < originalPriceNum ? originalPriceNum : 0
 
     const activeColors = colors.filter(c => !c.toDelete)
-    if (activeColors.length === 0) { setError('يرجى إضافة لون واحد على الأقل'); return }
+    if (!isEdit && activeColors.length === 0) { setError('يرجى إضافة لون واحد على الأقل'); return }
     if (activeColors.some(c => !c.name.trim())) { setError('يرجى إدخال اسم لكل لون'); return }
 
     savingRef.current = true
@@ -494,10 +505,10 @@ export default function ProductForm({ productId, initialData, categories = [] }:
           images.push({ image_url: url, sort_order: img.sort_order })
         }
         savedColors.push({ id: color.id, name: color.name.trim(), hex_code: color.hex_code,
-          is_visible: color.is_visible, sort_order: color.sort_order, images })
+          is_visible: color.is_visible, sort_order: color.sort_order, images, restore: Boolean(color.archived) })
       }
       const savedSizes = sizes.filter(size => !size.toDelete).map(size => ({
-        id: size.id, label: size.label.trim(), is_visible: size.is_visible, sort_order: size.sort_order,
+        id: size.id, label: size.label.trim(), is_visible: size.is_visible, sort_order: size.sort_order, restore: Boolean(size.archived),
       }))
       const stockChanges = savedColors.flatMap(color => savedSizes.flatMap(size => {
         const key = stockKey(color.id, size.id)
@@ -772,6 +783,26 @@ export default function ProductForm({ productId, initialData, categories = [] }:
       </section>
 
       {/* Stock management */}
+      {(colors.some(c => c.toDelete) || sizes.some(s => s.toDelete)) && (
+        <details className="text-sm text-muted">
+          <summary className="cursor-pointer w-fit flex items-center gap-2 py-2"><Archive size={15} />الألوان والمقاسات المؤرشفة</summary>
+          <p className="text-xs my-2">الحذف ينقل الخيارات إلى الأرشيف عند حفظ التعديلات. استرجاعها يحافظ على مخزونها وارتباطها بالطلبات.</p>
+          <div className="flex flex-wrap gap-2">
+            {colors.filter(c => c.toDelete).map(color => (
+              <button type="button" key={color.id} disabled={saving} onClick={() => updateColor(color.id, { toDelete: false, is_visible: true })}
+                className="flex items-center gap-2 px-3 py-2 bg-white border border-border rounded-lg" aria-label={`استرجاع اللون ${color.name}`}>
+                <RotateCcw size={13} />استرجاع اللون: {color.name}
+              </button>
+            ))}
+            {sizes.filter(s => s.toDelete).map(size => (
+              <button type="button" key={size.id} disabled={saving} onClick={() => updateSize(size.id, { toDelete: false, is_visible: true })}
+                className="flex items-center gap-2 px-3 py-2 bg-white border border-border rounded-lg" aria-label={`استرجاع المقاس ${size.label}`}>
+                <RotateCcw size={13} />استرجاع المقاس: {size.label}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
       <StockGrid
         colors={colors.filter(c => !c.toDelete)}
         sizes={visibleSizes}
