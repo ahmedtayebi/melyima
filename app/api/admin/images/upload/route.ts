@@ -39,11 +39,12 @@ export async function POST(req: Request) {
       const url = await uploadCloudinaryProductImage(bytes, format.mime, backupUrl)
       return NextResponse.json({ success: true, url, backup_url: backupUrl, mirrored: true }, { headers: { 'Cache-Control': 'no-store' } })
     } catch {
-      // A CDN outage must not discard the durable copy or prevent catalog saves.
+      // Retain the backup, but never publish it as the product's permanent source.
+      // The form keeps the selected file so the administrator can retry.
       return NextResponse.json({
-        success: true, url: backupUrl, backup_url: backupUrl, mirrored: false,
-        warning: 'حُفظت الصورة في Supabase، لكن تعذّر إرسال نسختها إلى Cloudinary. ستظهر من Supabase مباشرة.',
-      }, { headers: { 'Cache-Control': 'no-store' } })
+        success: false, mirrored: false,
+        error: 'تعذّر رفع الصورة إلى Cloudinary. لم تُحفظ تعديلات المنتج؛ حاولي الحفظ مجددًا.',
+      }, { status: 502, headers: { 'Cache-Control': 'no-store' } })
     }
   } catch {
     return NextResponse.json({ success: false, error: 'تعذّر رفع الصورة إلى Supabase. تحققي من إعدادات التخزين وحاولي مجددًا.' }, { status: 500 })

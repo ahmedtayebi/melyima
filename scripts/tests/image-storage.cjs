@@ -99,7 +99,11 @@ function load(file, mocks={}, globals={}) {
   assert.equal((await exports.POST(req(new File([],'empty.jpg')))).status,413);
   assert.equal((await exports.POST(req(new File([new Uint8Array(storage.MAX_PRODUCT_IMAGE_BYTES+1)],'large.jpg')))).status,413);
   assert.equal(uploads,1);assert.equal(ensureCalls,1);
-  mirrorFails=true;res=await exports.POST(req());assert.equal(res.status,200);result=await res.json();assert.equal(result.mirrored,false);assert.equal(result.url,result.backup_url);assert.match(result.url,/test.supabase.co/);assert(result.warning);assert(!JSON.stringify(result).includes('secret'));assert.equal(mirrorCalls,2);
+  mirrorFails=true;res=await exports.POST(req());assert.equal(res.status,502);result=await res.json();
+  assert.equal(result.success,false);assert.equal(result.mirrored,false);
+  assert.equal(result.url,undefined,'failed Cloudinary uploads must not publish a Supabase primary URL');
+  assert.equal(result.backup_url,undefined);assert.match(result.error,/Cloudinary/);
+  assert.equal(res.headers.get('cache-control'),'no-store');assert(!JSON.stringify(result).includes('secret'));assert.equal(mirrorCalls,2);
   uploadError={message:'secret database information'};res=await exports.POST(req());assert.equal(res.status,500);assert(!(await res.text()).includes('secret'));
   assert.equal(mirrorCalls,2,'a failed backup must never upload only to Cloudinary');
 
@@ -152,5 +156,26 @@ function load(file, mocks={}, globals={}) {
   let calls=0;
   const listDb={from(){return {select(){return this},not(){return this},order(){return this},limit(){return this},gt(){this.cursor=true;return this},then(resolve){calls++;resolve({data:this.cursor?[]:Array.from({length:500},(_,i)=>({id:String(i),image_url:oldUrl,color_image_url:oldUrl})),error:null})}}}};
   assert.equal((await migration.collectReferences(listDb)).length,1500);assert.equal(calls,6);
-  console.log('PASS: backup-first dual upload, signed Cloudinary requests, graceful CDN upload failure, fallback on image error/error GIF without loops, source changes, old images, Storage and migration safeguards');
+  // Execute the actual product page: crawlers and shoppers must receive the same
+  // primary URL, without looking up or downloading the Supabase backup.
+  const product={id, name:'Dress', price:5900, is_visible:true, product_sizes:[],
+    product_colors:[{id, is_visible:true, sort_order:0, image_url:primary(backup),
+      product_color_images:[{id,image_url:primary(backup),sort_order:0}]}]};
+  const page=load('app/(store)/products/[id]/page.tsx',{
+    '@/lib/supabase/static':{createStaticClient:()=>({from(table){return {
+      select(){return this},eq(){return this},single(){return this},
+      then(resolve){resolve({data:table==='products'?product:table==='store_settings'?{value:''}:[],error:null})},
+    }}})},
+    'next/navigation':{notFound(){assert.fail('product should exist')}},
+    '@/components/store/ProductDetail':{default:function ProductDetail(){}},
+    '@/lib/product-image-sources.mjs':{productImageBackupUrl(){assert.fail('metadata must not prefer the backup')}},
+  });
+  const props={params:Promise.resolve({id})};
+  const metadata=await page.generateMetadata(props);
+  assert.equal(metadata.openGraph.images[0].url,primary(backup));
+  const rendered=await page.default(props);
+  const [structuredData,detail]=rendered.props.children;
+  assert.equal(JSON.parse(structuredData.props.dangerouslySetInnerHTML.__html).image,primary(backup));
+  assert.equal(detail.props.product.product_colors[0].images[0].image_url,primary(backup));
+  console.log('PASS: Cloudinary primary for storefront/metadata, backup-first dual upload, signed Cloudinary requests, rejected incomplete uploads, fallback on image error/error GIF without loops, source changes, old images, Storage and migration safeguards');
 })().catch(error=>{console.error(error);process.exitCode=1});
