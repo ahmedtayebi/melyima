@@ -14,6 +14,7 @@ function fixture() {
     product_color_images: [{ id: 'gallery', image_url: source }],
     product_colors: [{ id: 'cover', image_url: source }],
     order_items: [{ id: 'order', color_image_url: source }],
+    reviews: [],
   }
   let uploads = 0, writes = 0, downloads = 0, saves = 0, saved
   const db = { from(table) { return {
@@ -38,9 +39,12 @@ function fixture() {
 
 assert(isMirrorSource(source, origin))
 for (const invalid of [source.replace('test.supabase.co', 'other.supabase.co'), source + '?token=secret',
-  source.replace('/products/', '/migrated/'), primary, '/logo.png', source.replace('catalog-images', 'product-images')]) {
+  source.replace('catalog-images', 'private-files'), primary, '/logo.png']) {
   assert(!isMirrorSource(invalid, origin))
 }
+assert(isMirrorSource(`${origin}/storage/v1/object/public/review-images/1728000000000-test.jpeg`, origin))
+assert(isMirrorSource(source.replace('catalog-images', 'product-images'), origin))
+assert(isMirrorSource(`${origin}/storage/v1/object/public/catalog-images/migrated/abc123.jpg`, origin))
 const dry = fixture()
 dry.tables.product_colors.push({ id: 'old', image_url: 'https://res.cloudinary.com/old/image/upload/photo.jpg' })
 const preview = await mirrorImages(dry.options)
@@ -64,6 +68,25 @@ assert.equal(run.tables.product_colors[0].image_url, source)
 assert.equal(run.tables.order_items[0].color_image_url, source)
 await mirrorImages({ ...run.options, mode: 'apply', journal: run.state().saved })
 assert.equal(run.state().uploads, 1, 'apply after rollback must reuse the verified mirror')
+
+// Old journal entries must not force downloads or overwrite catalog edits made
+// after a successful migration. Never confuse unfinished conflicts with these.
+const historic = fixture()
+await mirrorImages({ ...historic.options, mode: 'apply' })
+historic.tables.product_color_images.length = 0
+historic.tables.product_colors[0].image_url = 'newer-admin-photo'
+const beforeResume = historic.state()
+const resumed = await mirrorImages({ ...historic.options, mode: 'apply', journal: beforeResume.saved })
+assert.equal(resumed.skipped, 2); assert.equal(resumed.conflicts, 0); assert.equal(resumed.changed, 1)
+assert.equal(historic.state().downloads, beforeResume.downloads)
+assert.equal(historic.state().uploads, beforeResume.uploads)
+assert.equal(historic.tables.product_colors[0].image_url, 'newer-admin-photo')
+assert.equal(historic.state().saved.rows.filter(row => row.state === 'superseded').length, 2)
+const unfinished = fixture()
+await assert.rejects(() => mirrorImages({ ...unfinished.options, mode: 'apply', upload: async () => { throw Error('failed') } }))
+unfinished.tables.product_color_images.length = 0
+const unfinishedRetry = await mirrorImages({ ...unfinished.options, mode: 'apply', journal: unfinished.state().saved })
+assert.equal(unfinishedRetry.conflicts, 1); assert.equal(unfinishedRetry.skipped, 0)
 
 for (const failure of ['upload', 'download', 'hash']) {
   const broken = fixture()

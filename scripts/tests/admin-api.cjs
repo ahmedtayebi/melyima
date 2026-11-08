@@ -24,7 +24,8 @@ const db = {
     return query;
   },
 };
-const cache = { invalidateStoreCache() { invalidations++; } };
+let lastInvalidation;
+const cache = { invalidateStoreCache(change) { invalidations++; lastInvalidation = JSON.parse(JSON.stringify(change)); } };
 const catalog = load('app/api/admin/catalog/route.ts', {
   '@/app/api/ecotrack/_auth': auth, '@/lib/supabase/admin': { createAdminClient: () => db },
   '@/lib/store-cache': cache, '@/lib/catalog-validation': load('lib/catalog-validation.ts'),
@@ -45,6 +46,12 @@ const post = body => catalog.POST({ json: async () => body });
     const before = invalidations;
     assert.equal((await post(action)).status, 200);
     assert.equal(invalidations, before + 1, `${action.action} did not refresh store cache`);
+    const kind = action.action.startsWith('review_') ? 'reviews'
+      : action.action.startsWith('category_') ? 'categories'
+      : action.action === 'settings_save' ? 'policy'
+      : action.action === 'stock_save' ? 'stock' : 'products';
+    assert.equal(lastInvalidation.kind, kind);
+    if (kind === 'stock' || kind === 'products') assert.deepEqual(lastInvalidation.productIds, [id]);
   }
   const archiveCalls = catalogRpcs.filter(call => call.name === 'set_catalog_product_archived');
   assert.deepEqual(archiveCalls.map(call => call.args.p_archived), [true, false]);
@@ -124,6 +131,7 @@ const post = body => catalog.POST({ json: async () => body });
   assert.equal(freshOrder.headers.get('Cache-Control'), 'no-store');
   assert.equal((await freshOrder.json()).order.updated_at, updated_at);
   const editing = orders.PUT(req, params);
+  const beforeOrderRequests = invalidations;
   await entered;
   assert.equal((await orders.PUT(req, params)).status, 409);
   assert.equal((await orders.PATCH({ json: async () => ({ action: 'unconfirm' }) }, params)).status, 409);
@@ -133,6 +141,7 @@ const post = body => catalog.POST({ json: async () => body });
   assert.equal(locks.size, 0);
   assert.equal((await orders.PUT({ json: async () => ({ ...order, expected_updated_at: 'old' }) }, params)).status, 409);
   assert.equal(locks.size, 0, 'validation return leaked mutex');
+  assert.equal(invalidations, beforeOrderRequests, 'unchanged items, conflicts and failed actions must not refresh store pages');
   lockFailure = true;
   assert.equal((await orders.PUT(req, params)).status, 500);
   assert.equal(externalCalls, 1, 'lock failure must stop external mutation');

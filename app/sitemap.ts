@@ -9,8 +9,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const supabase = createStaticClient()
 
   const [{ data: products }, { data: categories }] = await Promise.all([
-    supabase.from('products').select('id, updated_at').eq('is_visible', true),
-    supabase.from('categories').select('id, updated_at').eq('is_visible', true),
+    supabase.from('products').select('id, updated_at').eq('is_visible', true).order('id'),
+    supabase.from('categories').select('id, updated_at').eq('is_visible', true).order('id'),
   ])
 
   const productUrls: MetadataRoute.Sitemap = (products ?? []).map(p => ({
@@ -28,10 +28,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }))
 
   return [
-    { url: BASE_URL, lastModified: new Date(), changeFrequency: 'weekly', priority: 1.0 },
-    { url: `${BASE_URL}/new-arrivals`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.9 },
-    { url: `${BASE_URL}/best-sellers`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.8 },
-    { url: `${BASE_URL}/discounts`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.8 },
+    // These routes have no persisted modification date. Regeneration time is not
+    // a content change, and would force a different sitemap on every rebuild.
+    { url: BASE_URL, changeFrequency: 'weekly', priority: 1.0 },
+    { url: `${BASE_URL}/new-arrivals`, changeFrequency: 'daily', priority: 0.9 },
+    { url: `${BASE_URL}/best-sellers`, changeFrequency: 'weekly', priority: 0.8 },
+    { url: `${BASE_URL}/discounts`, changeFrequency: 'daily', priority: 0.8 },
     ...productUrls,
     ...categoryUrls,
   ]

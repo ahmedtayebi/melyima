@@ -1,49 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { isReviewImageSource, mirrorReviewImages } from '@/lib/review-image-mirror.mjs'
 
-const REVIEW_IMAGES_BUCKET_PATH = '/storage/v1/object/public/review-images/'
-
-function isOwnReviewImageUrl(value: string) {
-  try {
-    const url = new URL(value)
-    const supabaseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!)
-
-    return (
-      url.protocol === 'https:' &&
-      url.origin === supabaseUrl.origin &&
-      url.pathname.startsWith(REVIEW_IMAGES_BUCKET_PATH)
-    )
-  } catch {
-    return false
-  }
-}
+export const runtime = 'nodejs'
+export const maxDuration = 120
 
 export async function POST(req: NextRequest) {
   try {
     const { customer_name, rating, comment, images } = await req.json()
 
-    if (!customer_name?.trim() || !rating || !comment?.trim()) {
+    if (typeof customer_name !== 'string' || !customer_name.trim() || customer_name.length > 200 ||
+        typeof comment !== 'string' || !comment.trim() || comment.length > 10000) {
       return NextResponse.json(
         { success: false, error: 'جميع الحقول مطلوبة' },
         { status: 400 }
       )
     }
 
-    if (rating < 1 || rating > 5) {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       return NextResponse.json(
         { success: false, error: 'التقييم يجب أن يكون بين 1 و 5' },
         { status: 400 }
       )
     }
 
-    const safeImages: string[] = Array.isArray(images)
-      ? images.filter((u: unknown) => typeof u === 'string').slice(0, 3)
-      : []
-
-    if (safeImages.length > 0 && safeImages.some(url => !isOwnReviewImageUrl(url))) {
+    if (images !== undefined && (!Array.isArray(images) || images.length > 3 || images.some(url => !isReviewImageSource(url)))) {
       return NextResponse.json(
         { success: false, error: 'رابط الصورة غير مسموح به' },
         { status: 400 }
+      )
+    }
+
+    let primaryImages: string[]
+    try {
+      primaryImages = await mirrorReviewImages(images ?? [])
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'تعذّر تجهيز الصور. لم تُرسل المراجعة؛ حاولي مجددًا.' },
+        { status: 502 }
       )
     }
 
@@ -59,7 +53,7 @@ export async function POST(req: NextRequest) {
         rating: Number(rating),
         comment: String(comment).trim(),
         status: 'pending',
-        images: safeImages,
+        images: primaryImages,
       })
 
     if (error) {

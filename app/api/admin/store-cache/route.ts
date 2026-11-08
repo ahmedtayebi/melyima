@@ -7,7 +7,7 @@ export async function POST() {
     const auth = await requireAdmin()
     if (auth instanceof NextResponse) return auth
 
-    invalidateStoreCache()
+    invalidateStoreCache({ kind: 'all' })
 
     return NextResponse.json({ success: true })
   } catch (err) {

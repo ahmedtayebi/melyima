@@ -5,6 +5,7 @@ import { Star, Check, X, AlertTriangle } from 'lucide-react'
 import { saveCatalog } from '@/lib/admin-catalog-client'
 import { cn } from '@/lib/utils'
 import type { Review } from '@/lib/types'
+import { ProductImg } from '@/components/ui/ProductImage'
 
 const STATUS_CONFIG = {
   pending:  { label: 'قيد المراجعة', badge: 'bg-amber-100 text-amber-800' },
@@ -186,8 +187,7 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
             {review.images && review.images.length > 0 && (
               <div className="flex gap-2 justify-end flex-wrap">
                 {review.images.filter(Boolean).map((url, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
+                  <ProductImg
                     key={i}
                     src={url}
                     alt=""
@@ -208,8 +208,7 @@ export default function ReviewsClient({ initialReviews }: { initialReviews: Revi
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
           onClick={() => setLightbox(null)}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <ProductImg
             src={lightbox}
             alt=""
             className="max-w-lg max-h-[80vh] object-contain rounded-xl shadow-2xl"

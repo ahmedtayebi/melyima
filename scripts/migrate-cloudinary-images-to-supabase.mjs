@@ -13,17 +13,17 @@ export function isCloudinary(value) {
   try { const u = new URL(value); return u.protocol === 'https:' && u.hostname === 'res.cloudinary.com' && !u.username && !u.password }
   catch { return false }
 }
-export async function downloadImage(url, fetcher = fetch) {
+export async function downloadImage(url, fetcher = fetch, maxBytes = MAX_PRODUCT_IMAGE_BYTES) {
   // No credentials, cookies or redirects to arbitrary hosts.
   const res = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(30000) })
   if (!res.ok) { await res.body?.cancel(); throw new Error(`Download HTTP ${res.status}`) }
-  if (Number(res.headers.get('content-length')) > MAX_PRODUCT_IMAGE_BYTES) {
-    await res.body?.cancel(); throw new Error('Image exceeds 4 MiB')
+  if (Number(res.headers.get('content-length')) > maxBytes) {
+    await res.body?.cancel(); throw new Error(`Image exceeds ${maxBytes / 1024 / 1024} MiB`)
   }
   const chunks = []; let size = 0
   for await (const chunk of res.body ?? []) {
     size += chunk.length
-    if (size > MAX_PRODUCT_IMAGE_BYTES) throw new Error('Image exceeds 4 MiB')
+    if (size > maxBytes) throw new Error(`Image exceeds ${maxBytes / 1024 / 1024} MiB`)
     chunks.push(chunk)
   }
   const bytes = Buffer.concat(chunks)

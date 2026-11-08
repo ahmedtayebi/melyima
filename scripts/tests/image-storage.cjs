@@ -43,6 +43,22 @@ function load(file, mocks={}, globals={}) {
   for(const source of [backup,'/logo.png','blob:preview','https://res.cloudinary.com/cloud/image/upload/legacy.jpg',primary(backup).replace('https:','http:'),primary(backup).replace('res.cloudinary.com/','res.cloudinary.com.attacker.test/'),primary(backup).replace('/test.supabase.co/','/other.supabase.co/')]) assert.equal(sources.productImageBackupUrl(source),null);
   assert.throws(()=>sources.cloudinaryBackupPublicId(backup.replace('test.supabase.co','other.supabase.co')));
   assert.throws(()=>sources.cloudinaryBackupPublicId(backup+'?token=private'));
+  const extendedBackups=['review-images/1728000000000-review.jpeg',`product-images/${uuid}/photo.png`,'catalog-images/migrated/abc123.jpg']
+    .map(path=>`https://test.supabase.co/storage/v1/object/public/${path}`);
+  for(const original of extendedBackups) {
+    assert.match(sources.cloudinaryBackupPublicId(original),/supabase-v2/);
+    assert.equal(sources.productImageBackupUrl(primary(original)),original);
+    assert.equal(sources.productImageBackupUrl(primary(original).replace(/jpg$/,'webp')),original);
+  }
+  const longBackup=`https://test.supabase.co/storage/v1/object/public/product-images/${uuid}/${uuid}/123456789012345678901234567890.webp`;
+  const compactId=sources.cloudinaryBackupPublicId(longBackup);
+  assert.match(compactId,/supabase-v3/);assert(compactId.length<=255);
+  assert.equal(sources.productImageBackupUrl(primary(longBackup)),longBackup);
+  assert.equal(sources.productImageBackupUrl(primary(longBackup).replace('/upload/','/upload/f_auto,q_auto/').replace(/jpg$/,'avif')),longBackup);
+  extendedBackups.push(longBackup);
+  for(const invalid of ['review-images/../private/file.jpg','review-images/a%2fb.jpg','review-images/file.svg','private-files/a.jpg']) {
+    assert.throws(()=>sources.cloudinaryBackupPublicId(`https://test.supabase.co/storage/v1/object/public/${invalid}`));
+  }
 
   let cloudRequests=[],cloudResponse=()=>Response.json({public_id:sources.cloudinaryBackupPublicId(backup),secure_url:primary(backup)});
   const cloud=load('lib/cloudinary-product-upload.mjs',{'./product-image-sources.mjs':sources},{fetch:async(url,options)=>{
@@ -59,6 +75,10 @@ function load(file, mocks={}, globals={}) {
   for(const response of [()=>new Response('disabled',{status:401}),()=>new Response('rate limited',{status:429}),()=>new Response('broken json'),()=>Response.json({public_id:'wrong',secure_url:primary(backup)}),()=>Response.json({public_id:sources.cloudinaryBackupPublicId(backup),secure_url:primary(backup).replace('res.cloudinary.com','attacker.test')}),()=>{throw new Error('timeout')}]) {
     cloudResponse=response;await assert.rejects(()=>cloud.uploadCloudinaryProductImage(jpeg,'image/jpeg',backup));
   }
+  cloudResponse=()=>Response.json({error:{message:'public_id (secret-test-key) is too long'}},{status:400});
+  await assert.rejects(()=>cloud.uploadCloudinaryProductImage(jpeg,'image/jpeg',backup),error=>{
+    assert.match(error.message,/public_id_too_long/);assert(!error.message.includes('secret-test-key'));return true;
+  });
   const missingConfig=load('lib/cloudinary-product-upload.mjs',{'./product-image-sources.mjs':sources},{process:{env:{}},fetch:()=>{throw Error('must not fetch')}});
   await assert.rejects(()=>missingConfig.uploadCloudinaryProductImage(jpeg,'image/jpeg',backup),/configuration/);
 
@@ -133,6 +153,10 @@ function load(file, mocks={}, globals={}) {
     assert.equal(render().props.src,sources.productImageBackupUrl(source),'failure before hydration must trigger fallback');
     source='blob:local-preview';element=render();element.props.onError();assert.equal(render().props.src,source);
     source='https://res.cloudinary.com/test-cloud/image/upload/legacy.jpg';element=render();element.props.onError();assert.equal(render().props.src,source,'never invent backups for old images');
+    for(const original of extendedBackups) {
+      source=primary(original);element=render();assert.equal(element.props.src,source);
+      element.props.onError();assert.equal(render().props.src,original,'review and migrated images use the exact backup only after failure');
+    }
   }
 
   const oldUrl='https://res.cloudinary.com/cloud/image/upload/a.jpg';

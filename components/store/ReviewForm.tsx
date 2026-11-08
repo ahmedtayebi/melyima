@@ -77,7 +77,7 @@ export default function ReviewForm() {
       if (error) {
         console.error('Storage upload error:', error)
         setImages(prev => prev.map((e, idx) => idx === i ? { ...e, progress: 'error' } : e))
-        continue
+        throw new Error('تعذّر رفع إحدى الصور؛ حاولي مجددًا.')
       }
 
       const { data } = supabase.storage.from('review-images').getPublicUrl(path)

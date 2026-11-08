@@ -12,7 +12,7 @@ function load(file, mocks = {}) {
 }
 const id = '11111111-1111-4111-8111-111111111111';
 const order = { id, status: 'pending', deleted_at: null, updated_at: '2026-09-29T00:00:00Z', order_items: [] };
-let result, calls = [], released = 0, busy = false, authorized = true;
+let result, calls = [], released = 0, busy = false, authorized = true, refreshed = [];
 const db = {
   rpc: async (name, args) => { calls.push({ name, args }); return result; },
   from() { throw new Error('Restoration escaped the atomic RPC'); },
@@ -26,15 +26,20 @@ const route = load('app/api/orders/[id]/route.ts', {
   '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
   '@/lib/order-total': load('lib/order-total.ts'),
   '@/lib/delivery-prices': load('lib/delivery-prices.ts'),
-  '@/lib/ecotrack': {}, '@/lib/order-ecotrack': {}, '@/lib/store-cache': { invalidateStoreCache() {} },
+  '@/lib/ecotrack': {}, '@/lib/order-ecotrack': {},
+  '@/lib/store-cache': { invalidateStoreCache(change) { refreshed.push(JSON.parse(JSON.stringify(change))); } },
 });
 const patch = (body = { action: 'restore' }) => route.PATCH({ json: async () => body }, { params: Promise.resolve({ id }) });
 (async () => {
-  result = { data: { success: true, order, repaired_items: 1 }, error: null };
+  result = { data: { success: true, order: {...order, order_items: [{product_id: id}]}, reserved_items: 1, repaired_items: 1 }, error: null };
   assert.equal((await patch()).status, 200);
   assert.equal(calls[0].name, 'restore_order_safely');
   assert.equal(calls[0].args.p_repairs.length, 0);
   assert.equal(released, 1);
+  assert.deepEqual(refreshed, [{kind:'stock', productIds:[id]}]);
+  result = {data: {success: true, order, reserved_items: 0}, error: null};
+  assert.equal((await patch()).status, 200);
+  assert.equal(refreshed.length, 1, 'unlimited stock restore does not change public inventory');
   result = { data: { success: true, already_restored: true, order: { ...order, status: 'confirmed' } }, error: null };
   const repeated = await (await patch()).json();
   assert.equal(repeated.order.status, 'confirmed', 'retries must not reset actual status');
@@ -60,5 +65,6 @@ const patch = (body = { action: 'restore' }) => route.PATCH({ json: async () => 
   const beforeBusy = calls.length;
   busy = true; assert.equal((await patch()).status, 409); assert.equal(calls.length, beforeBusy);
   authorized = false; assert.equal((await patch()).status, 401); assert.equal(calls.length, beforeBusy);
+  assert.equal(refreshed.length, 1, 'retries, conflicts and failures must not invalidate pages');
   console.log('PASS: atomic restore API, explicit repairs, canonical status, distinct errors, missing migration, mutex and auth');
 })().catch(error => { console.error(error); process.exitCode = 1; });

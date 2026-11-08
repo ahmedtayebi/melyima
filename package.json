@@ -9,9 +9,9 @@
     "migrate:cloudinary": "node scripts/mirror-supabase-images-to-cloudinary.mjs",
     "images:mirror": "node scripts/mirror-supabase-images-to-cloudinary.mjs",
     "migrate:supabase": "node scripts/migrate-cloudinary-images-to-supabase.mjs",
-    "test:images": "node scripts/tests/image-storage.cjs && node scripts/tests/image-mirror.mjs",
+    "test:images": "node scripts/tests/image-storage.cjs && node scripts/tests/image-mirror.mjs && node scripts/tests/review-images.cjs && node scripts/tests/review-image-migration.mjs",
     "lint": "eslint",
-    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs && node scripts/tests/order-restoration.cjs && node scripts/tests/order-labels.cjs && node scripts/tests/bulk-orders.cjs",
+    "test:admin": "node scripts/tests/admin-ui.cjs && node scripts/tests/admin-api.cjs && node scripts/tests/order-pricing.cjs && node scripts/tests/order-restoration.cjs && node scripts/tests/order-labels.cjs && node scripts/tests/bulk-orders.cjs && node scripts/tests/store-cache.cjs",
     "test:admin:db": "bash scripts/tests/run-admin-db-tests.sh"
   },
   "dependencies": {

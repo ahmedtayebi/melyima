@@ -54,6 +54,11 @@ function itemKey(productId: string, colorId: string, sizeId: string) {
   return `${productId}:${colorId}:${sizeId}`
 }
 
+function refreshStockPages(items: { product_id: string | null }[]) {
+  try { invalidateStoreCache({ kind: 'stock', productIds: items.map(item => item.product_id) }) }
+  catch (error) { console.error('Order stock cache refresh failed:', error) }
+}
+
 function productDescription(items: StoredOrderItem[]) {
   return items
     .map(item => `${item.product_name} - ${item.color_name} - ${item.size_label} x${item.quantity}`)
@@ -140,7 +145,7 @@ export async function DELETE(req: NextRequest, { params }: Props) {
 
     const { data: order, error: fetchError } = await supabase
       .from('orders')
-      .select('id, status, deleted_at, ecotrack_tracking, ecotrack_status')
+      .select('id, status, deleted_at, ecotrack_tracking, ecotrack_status, order_items(product_id)')
       .eq('id', id)
       .single()
 
@@ -182,6 +187,8 @@ export async function DELETE(req: NextRequest, { params }: Props) {
         .maybeSingle()
 
       if (latestOrder?.deleted_at) {
+        // The write may have committed before a transport error was returned.
+        refreshStockPages(order.order_items ?? [])
         return NextResponse.json({ success: true, already_deleted: true, restored_items: 0 })
       }
 
@@ -196,13 +203,13 @@ export async function DELETE(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
     }
 
+    if (Number(restoredItems) > 0) refreshStockPages(order.order_items ?? [])
     return NextResponse.json({ success: true, restored_items: restoredItems ?? 0 })
   } catch (error) {
     console.error('Unexpected DELETE /api/orders/[id] error:', error)
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
   } finally {
     if (release) {
-      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
       await release()
     }
   }
@@ -279,6 +286,9 @@ export async function PATCH(req: NextRequest, { params }: Props) {
         return NextResponse.json({ ...data, error: data.code === 'insufficient_stock'
           ? 'المخزون لا يكفي لإكمال الاسترجاع. راجعي العناصر والكميات المتاحة.'
           : 'بعض خيارات الطلب لم تعد مرتبطة بمنتجات المتجر. اختاري البدائل المناسبة لاسترجاعه.' }, { status: 409 })
+      }
+      if (!data.already_restored && Number(data.reserved_items) > 0) {
+        refreshStockPages(data.order?.order_items ?? [])
       }
       return NextResponse.json(data)
     }
@@ -361,7 +371,6 @@ export async function PATCH(req: NextRequest, { params }: Props) {
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
   } finally {
     if (release) {
-      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
       await release()
     }
   }
@@ -711,6 +720,13 @@ export async function PUT(req: NextRequest, { params }: Props) {
       return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
     }
 
+    // Refresh immediately after the committed stock write, even if subsequent
+    // Ecotrack draft creation fails. Include products removed from the order.
+    const quantitiesChanged = oldQuantities.size !== rpcItems.length || rpcItems.some(item =>
+      oldQuantities.get(itemKey(item.product_id, item.color_id, item.size_id)) !== item.quantity
+    )
+    if (quantitiesChanged) refreshStockPages([...(currentOrder.order_items ?? []), ...rpcItems])
+
     if (staleEcotrackDraft) {
       const replacement = await ensureEcotrackDraft(supabase, id)
       if (!replacement.success || !replacement.tracking) {
@@ -743,7 +759,6 @@ export async function PUT(req: NextRequest, { params }: Props) {
     return NextResponse.json({ success: false, error: 'خطأ في الخادم' }, { status: 500 })
   } finally {
     if (release) {
-      try { invalidateStoreCache() } catch (error) { console.error('Order cache refresh failed:', error) }
       await release()
     }
   }

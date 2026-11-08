@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Star, MessageSquare, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { motion, useInView, AnimatePresence, useReducedMotion } from 'framer-motion'
 import ReviewForm from './ReviewForm'
+import { ProductImg } from '@/components/ui/ProductImage'
 import type { Review } from '@/lib/types'
 
 // ─── Design tokens (Desert Gold Editorial) ────────────────────────────────────
@@ -122,8 +123,7 @@ function ReviewCard({
           className="relative block w-full aspect-[4/3] overflow-hidden text-right"
           aria-label="فتح صورة التقييم"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photos[0]} alt="" className="w-full h-full object-cover" />
+          <ProductImg src={photos[0]} alt="" loading="lazy" className="w-full h-full object-cover" />
           {photos.length > 1 && (
             <span
               className="absolute bottom-3 left-3 rounded-full px-2.5 py-1 text-[11px] font-heading font-bold"
@@ -189,8 +189,7 @@ function ReviewCard({
                 style={{ border: `1px solid ${BORDER}` }}
                 aria-label={`فتح الصورة ${i + 2}`}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={url} alt="" className="w-full h-full object-cover" />
+                <ProductImg src={url} alt="" loading="lazy" className="w-full h-full object-cover" />
               </button>
             ))}
           </div>
@@ -392,16 +391,16 @@ export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
             aria-modal="true"
             aria-label="عرض الصورة"
           >
-            <motion.img
+            <motion.div
               initial={{ scale: 0.88, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.88, opacity: 0 }}
               transition={{ duration: 0.22, ease: EASE }}
-              src={lightbox}
-              alt=""
-              className="max-w-full max-h-full rounded-2xl object-contain shadow-2xl"
+              className="max-w-full max-h-full"
               onClick={e => e.stopPropagation()}
-            />
+            >
+              <ProductImg src={lightbox} alt="" className="max-w-full max-h-[90vh] rounded-2xl object-contain shadow-2xl" />
+            </motion.div>
             <button
               type="button"
               className="absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center transition-colors hover:bg-white/20"

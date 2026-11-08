@@ -77,7 +77,26 @@ export async function POST(request: Request) {
     }
     let warning: string | undefined
     try {
-      invalidateStoreCache()
+      switch (body.action) {
+        case 'settings_save':
+          invalidateStoreCache({ kind: 'policy' })
+          break
+        case 'review_delete':
+        case 'review_status':
+          invalidateStoreCache({ kind: 'reviews' })
+          break
+        case 'category_create':
+        case 'category_delete':
+          invalidateStoreCache({ kind: 'categories' })
+          break
+        case 'stock_save':
+          invalidateStoreCache({ kind: 'stock', productIds: [String(body.product_id)] })
+          break
+        default:
+          invalidateStoreCache({ kind: 'products', productIds: [
+            String(body.action === 'product_save' && isRecord(body.product) ? body.product.id : body.id),
+          ] })
+      }
     } catch (error) {
       console.error('Catalog saved but cache refresh failed:', error)
       warning = 'تم الحفظ، لكن تعذّر تحديث صفحات المتجر. قد تتأخر التغييرات في الظهور حتى التحديث التالي.'

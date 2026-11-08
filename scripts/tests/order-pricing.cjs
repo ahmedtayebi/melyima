@@ -19,12 +19,13 @@ const delivery = load('lib/delivery-prices.ts');
 const id = '11111111-1111-4111-8111-111111111111';
 const item = { product_id: id, color_id: id, size_id: id, quantity: 2 };
 const body = { expected_updated_at: '2026-09-28T12:00:00+00:00', customer_name: 'Customer', phone: '0555555555', wilaya: '16', delivery_type: 'home', commune: 'Alger', address: 'Address', notes: '', items: [item], total_price: 2400 };
-let order, calls, rpcError, extraProducts;
+let order, calls, rpcError, extraProducts, refreshed;
 function reset(status = 'pending', ecotrack = 'none') {
   order = { ...body, updated_at: body.expected_updated_at, id, status, deleted_at: null, delivery_price: 850, ecotrack_status: ecotrack, ecotrack_tracking: ecotrack === 'none' ? null : 'TRACK', total_price: 2850, order_items: [{ ...item, product_name: 'Dress', color_name: 'Black', size_label: 'M' }] };
   calls = [];
   rpcError = null;
   extraProducts = [];
+  refreshed = [];
 }
 const db = {
   from(table) {
@@ -44,7 +45,7 @@ const route = load('app/api/orders/[id]/route.ts', {
   '@/lib/order-edit-state': load('lib/order-edit-state.ts'),
   '@/lib/order-restoration': load('lib/order-restoration.ts'),
   '@/lib/order-operation': { acquireOrderOperation: async () => async () => {} },
-  '@/lib/store-cache': { invalidateStoreCache() {} },
+  '@/lib/store-cache': { invalidateStoreCache(change) { refreshed.push(JSON.parse(JSON.stringify(change))); } },
   '@/lib/delivery-prices': delivery,
   '@/lib/order-total': pricing,
 });
@@ -62,6 +63,7 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
     reset();
     assert.equal((await put({...body, total_price: value})).status, 200);
     assert.equal(calls[0][1].p_total_price, value);
+    assert.equal(refreshed.length, 0, 'order price alone must not refresh catalog pages');
   }
   reset('confirmed', 'draft');
   assert.equal((await put(body)).status, 200);
@@ -76,6 +78,9 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
     assert.equal((await put(expanded)).status,200);
     const saved = calls.find(([name])=>name==='rpc')[1];
     assert.equal(saved.p_total_price,4050);assert.equal(saved.p_items.length,2);
+    assert.equal(refreshed.length, 1);
+    assert.equal(refreshed[0].kind, 'stock');
+    assert.deepEqual([...new Set(refreshed[0].productIds)], [id, secondId]);
     if (shipping==='draft') assert.equal(calls.find(([name])=>name==='ecotrack')[1].montant,4050);
   }
   reset('confirmed', 'draft');
@@ -83,6 +88,7 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
   assert.equal((await put(body)).status, 409);
   assert.equal(calls.at(-1)[0], 'ecotrack');
   assert.equal(calls.at(-1)[1].montant, 2850);
+  assert.equal(refreshed.length, 0, 'failed RPC must not invalidate pages');
   for (const [status, shipping] of [['confirmed', 'shipped'], ['delivered', 'shipped'], ['cancelled', 'none']]) {
     reset(status, shipping);
     assert.equal((await put(body)).status, 409);
@@ -160,6 +166,12 @@ const put = payload => route.PUT({ json: async () => payload }, { params: Promis
   assert.equal(calls[0][0], 'update');
   assert.equal(calls[0][1].notes, 'Note');
   assert.equal(Object.keys(calls[0][1]).length, 1);
+  assert.equal(refreshed.length, 0, 'notes-only edits must not invalidate pages');
+  reset();
+  const removedId = '22222222-2222-4222-8222-222222222222';
+  order.order_items.push({...item, product_id: removedId});
+  assert.equal((await put(body)).status, 200);
+  assert(refreshed[0].productIds.includes(removedId), 'removed product needs its restored stock refreshed');
   console.log('PASS: unchanged edit snapshots, real conflict review, equivalent timestamps, microseconds and shipped order protection');
   console.log('PASS: total validation, paid/free delivery, persistence, restored fees, changed destination, Ecotrack amount/rollback, locked orders and automatic pricing');
 })().catch(error => { console.error(error); process.exitCode = 1; });

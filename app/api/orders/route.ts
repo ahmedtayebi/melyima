@@ -200,8 +200,9 @@ export async function POST(req: NextRequest) {
     }
 
     const savedOrderId = orderId
-    try { invalidateStoreCache() } catch (error) { console.error('Order stock cache refresh failed:', error) }
     if (orderCreated) {
+      try { invalidateStoreCache({ kind: 'stock', productIds: rpcItems.map(item => item.product_id) }) }
+      catch (error) { console.error('Order stock cache refresh failed:', error) }
       after(async () => {
         try {
           await sendNewOrderNotification(savedOrderId)

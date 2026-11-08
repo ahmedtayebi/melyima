@@ -10,7 +10,7 @@ function load(file, mocks = {}, append = '') {
   const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8') + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, URL, Blob, Uint8Array, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, confirm: () => true, setTimeout() {} });
+  vm.runInNewContext(code, { exports, require: n => mocks[n] ?? require(n), console, Error, AbortController, URL, Blob, FormData, Uint8Array, fetch: mocks.$fetch, crypto: require('node:crypto').webcrypto, confirm: () => true, setTimeout() {} });
   return exports;
 }
 let slots = [], cursor = 0, effects = [], firstRender = true;
@@ -78,6 +78,35 @@ const save = tree => walk(tree).find(n => n.props?.children === 'حفظ التع
   await save(archivedForm());
   assert(payloads.at(-1).payload.colors.find(color=>color.id==='archived-color').restore);
   assert(payloads.at(-1).payload.sizes.find(size=>size.id==='archived-size').restore);
+
+  // A failed Cloudinary upload must stop the actual product save and preserve
+  // the selected file for retry, rather than publishing a permanent backup URL.
+  slots=[];cursor=0;effects=[];firstRender=true;navigations=[];
+  let uploadFails=true,uploadAttempts=0;
+  const primaryImage='https://res.cloudinary.com/test/image/upload/photo.jpg';
+  const uploadError='تعذّر رفع الصورة إلى Cloudinary';
+  const UploadForm=load('components/admin/ProductForm.tsx', {...mocks,$fetch:async(url,options)=>{
+    assert.equal(url,'/api/admin/images/upload');uploadAttempts++;
+    assert.equal(options.body.get('file').name,'photo.jpg');
+    return {ok:!uploadFails,status:uploadFails?502:200,json:async()=>uploadFails
+      ? {success:false,error:uploadError}
+      : {success:true,url:primaryImage,mirrored:true}};
+  }}).default;
+  const uploadRender=()=>{cursor=0;const tree=UploadForm({productId:'p',initialData});firstRender=false;return tree;};
+  uploadRender();effects.forEach(fn=>fn());await new Promise(resolve=>setImmediate(resolve));
+  const selectedFile=new (require('node:buffer').File)([new Uint8Array([255,216,255])],'photo.jpg',{type:'image/jpeg'});
+  const colorRow=()=>walk(uploadRender()).find(n=>n.type?.name==='ColorRow');
+  colorRow().props.onChange({images:[{file:selectedFile,preview:'blob:selected-photo',existing:false,sort_order:0}]});
+  const savesBeforeUpload=payloads.length;
+  await save(uploadRender());
+  assert.equal(uploadAttempts,1);assert.equal(payloads.length,savesBeforeUpload);
+  assert.equal(navigations.length,0);assert(walk(uploadRender()).some(n=>n.props?.children===uploadError));
+  assert.equal(colorRow().props.color.images[0].file,selectedFile);
+  uploadFails=false;await save(uploadRender());
+  assert.equal(uploadAttempts,2);assert.equal(payloads.length,savesBeforeUpload+1);
+  assert.equal(payloads.at(-1).payload.colors[0].images[0].image_url,primaryImage);
+  assert.deepEqual(navigations,['/admin/products']);
+  console.log('PASS: Cloudinary upload failure prevents catalog save, preserves selected file and retries with Cloudinary primary');
 
   slots=[];cursor=0;
   let productRequestFails=false; const archiveRequests=[];

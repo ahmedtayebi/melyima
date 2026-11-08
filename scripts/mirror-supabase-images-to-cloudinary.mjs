@@ -7,10 +7,12 @@ import { createClient } from '@supabase/supabase-js'
 import { cloudinaryBackupPublicId, productImageBackupUrl } from '../lib/product-image-sources.mjs'
 import { uploadCloudinaryProductImage } from '../lib/cloudinary-product-upload.mjs'
 import { imageFormat } from '../lib/product-image-storage.mjs'
-import { collectReferences, downloadImage, digest, replaceReference } from './migrate-cloudinary-images-to-supabase.mjs'
+import { downloadImage, digest } from './migrate-cloudinary-images-to-supabase.mjs'
+import { collectMirrorReferences, replaceMirrorReference } from './image-mirror-references.mjs'
 
-const columns = { product_color_images: 'image_url', product_colors: 'image_url', order_items: 'color_image_url' }
-const rowKey = row => JSON.stringify([row.table, row.id, row.field, row.oldUrl])
+const columns = { product_color_images: 'image_url', product_colors: 'image_url', order_items: 'color_image_url', reviews: 'images' }
+const rowKey = row => JSON.stringify([row.table, row.id, row.field, row.index ?? null, row.oldUrl])
+const referenceKey = row => JSON.stringify([row.table, row.id, row.field, row.index ?? null])
 const networkCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND',
   'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'])
 function networkCode(error) {
@@ -48,6 +50,7 @@ export function validateJournal(journal, origin, cloud) {
       !Array.isArray(journal.rows) || !journal.assets || Array.isArray(journal.assets)) throw new Error('Wrong project/cloud or invalid mirror journal')
   for (const row of journal.rows) {
     if (columns[row.table] !== row.field || typeof row.id !== 'string' ||
+        (row.table === 'reviews' && (!Number.isInteger(row.index) || row.index < 0)) ||
         !isMirrorSource(row.oldUrl, origin) || !Object.hasOwn(journal.assets, row.oldUrl)) throw new Error('Invalid mirror reference')
   }
   for (const [source, asset] of Object.entries(journal.assets)) {
@@ -64,12 +67,14 @@ function validatePrimary(primary, source, origin, cloud) {
   }
 }
 export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journal, persist,
-  download = downloadImage, upload = uploadCloudinaryProductImage, replace = replaceReference, log = console.log, wait }) {
+  download = url => downloadImage(url, fetch, 5 * 1024 * 1024),
+  upload = (bytes, mime, source) => uploadCloudinaryProductImage(bytes, mime, source, { timeoutMs: 60000 }),
+  replace = replaceMirrorReference, log = console.log, wait }) {
   if (!['dry-run', 'apply', 'rollback'].includes(mode)) throw new Error('Invalid mode')
   if (!cloud || !/^[a-z0-9_-]+$/i.test(cloud)) throw new Error('CLOUDINARY_CLOUD_NAME is required')
   journal ??= { version: 1, origin, cloud, rows: [], assets: {} }
   validateJournal(journal, origin, cloud)
-  const current = mode === 'rollback' ? [] : await collectReferences(db, url => typeof url === 'string')
+  const current = mode === 'rollback' ? [] : await collectMirrorReferences(db)
   const eligible = current.filter(row => isMirrorSource(row.oldUrl, origin))
   const images = new Set(eligible.map(row => row.oldUrl)).size
   log(`${eligible.length} eligible references / ${images} unique Supabase images. Other references left unchanged: ${current.length - eligible.length}.`)
@@ -86,10 +91,32 @@ export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journa
     }
   }
   await persist(journal)
-  let changed = 0, conflicts = 0, completed = 0
+  const currentByReference = new Map(current.map(row => [referenceKey(row), row.oldUrl]))
+  let changed = 0, conflicts = 0, completed = 0, skipped = 0
   for (const [source, asset] of Object.entries(journal.assets)) {
-    const rows = journal.rows.filter(row => row.oldUrl === source)
+    let rows = journal.rows.filter(row => row.oldUrl === source)
     if (!rows.length || (mode === 'rollback' && !asset.primary)) continue
+    if (mode === 'apply') {
+      rows = rows.filter(row => {
+        const value = currentByReference.get(referenceKey(row))
+        if (value === source) return true
+        if (asset.primary && value === asset.primary) {
+          row.state = 'applied'; delete row.error; changed++
+        } else if (row.state === 'applied' || row.state === 'superseded') {
+          // A completed historical migration is not permission to undo later edits.
+          row.state = 'superseded'; delete row.error; skipped++
+        } else {
+          row.error = 'Reference changed or deleted before migration'; conflicts++
+        }
+        return false
+      })
+      await persist(journal)
+      if (!rows.length) {
+        completed++
+        log(`Checked ${completed}/${Object.keys(journal.assets).length} images; no pending writes for this image. ${skipped} obsolete references skipped.`)
+        continue
+      }
+    }
     const step = `Image ${completed + 1}/${Object.keys(journal.assets).length}`
     const request = (operation, stage) => withNetworkRetry(operation, `${step} ${stage}`, { log, wait })
     // A stale journal or a changed Storage object must not redirect to a different photo.
@@ -125,8 +152,8 @@ export async function mirrorImages({ db, origin, cloud, mode = 'dry-run', journa
     completed++
     log(`Verified ${completed}/${Object.keys(journal.assets).length} images; ${changed} references complete, ${conflicts} conflicts/errors.`)
   }
-  log(`${mode}: ${changed} references complete, ${conflicts} conflicts/errors. Supabase originals retained.`)
-  return { images, references: eligible.length, changed, conflicts }
+  log(`${mode}: ${changed} references complete, ${conflicts} conflicts/errors; ${skipped} obsolete references skipped. Supabase originals retained.`)
+  return { images, references: eligible.length, changed, conflicts, skipped }
 }
 async function main() {
   const args = process.argv.slice(2)
@@ -164,7 +191,7 @@ async function main() {
     const result = await mirrorImages({ db, origin, cloud, mode, journal, persist })
     if (mode !== 'dry-run') {
       console.log('Journal: .local/image-mirror/state.json. Keep it for retries and rollback.')
-      console.log('Refresh the storefront through the authenticated POST /api/admin/store-cache endpoint after writes.')
+      console.log('Publish/redeploy the updated application after these writes so storefront pages use the new URLs.')
     }
     if (result.conflicts) process.exitCode = 1
   } finally {
